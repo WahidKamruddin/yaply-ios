@@ -1,0 +1,26 @@
+# Xcode build artifacts
+.build/
+DerivedData/
+*.xcuserdata/
+xcuserdata/
+
+# Swift Package Manager
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.swiftpm/configuration/registries.json
+
+# Xcode workspace user state
+*.xcworkspace/xcuserdata/
+*.xcworkspace/xcshareddata/
+
+# Compiled binaries
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# macOS
+.DS_Store
+
+# Environment / secrets
+Config.xcconfig
+*.xcconfig
+!Config.xcconfig.example
