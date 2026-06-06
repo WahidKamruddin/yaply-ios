@@ -16,7 +16,26 @@ struct MessageBubbleView: View {
     var onReplyInThread: ((DecryptedMessage) -> Void)?
     var onQuotationClick: ((UUID) -> Void)?
 
+    var swipeOffset: CGFloat = 0
+
+    @State private var showDeleteConfirmation = false
+
     var body: some View {
+        ZStack(alignment: .trailing) {
+            if isOwn {
+                Text(message.createdAt.timeOnly)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.yaplySecondary)
+                    .padding(.trailing, 16)
+                    .opacity(Double(min(1, abs(swipeOffset) / 50)))
+            }
+
+            mainRow
+                .offset(x: isOwn ? swipeOffset : 0)
+        }
+    }
+
+    private var mainRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
             if isOwn { Spacer(minLength: 60) }
 
@@ -37,7 +56,6 @@ struct MessageBubbleView: View {
                         .padding(.leading, 4)
                 }
 
-                // Quotation preview — floats above the bubble, Messenger-style
                 if let reply = replyMessage {
                     replyBlock(reply)
                         .frame(maxWidth: 180, alignment: isOwn ? .trailing : .leading)
@@ -59,17 +77,22 @@ struct MessageBubbleView: View {
                                     Label("Reply in Thread", systemImage: "bubble.left.and.bubble.right")
                                 }
                                 if isOwn {
-                                    Button("Delete", role: .destructive) { onDelete(message.id) }
+                                    Button("Delete", role: .destructive) { showDeleteConfirmation = true }
                                 }
                             }
                         }
+                    }
+                    .alert("Delete Message", isPresented: $showDeleteConfirmation) {
+                        Button("Delete", role: .destructive) { onDelete(message.id) }
+                        Button("Cancel", role: .cancel) { }
+                    } message: {
+                        Text("This will delete the message for everyone.")
                     }
 
                 if !reactions.isEmpty {
                     reactionPills
                 }
 
-                // Thread reply count link
                 if threadCount > 0 {
                     Button {
                         onOpenThread?(message)
@@ -87,15 +110,11 @@ struct MessageBubbleView: View {
                     .padding(.top, 2)
                 }
 
-                HStack(spacing: 3) {
-                    Text(message.createdAt.timeOnly)
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color.yaplySecondary)
-                    if isOwn && !message.isDeleted && isRead != nil {
-                        readCheckmarks
-                    }
+                // Read checkmarks only — timestamp revealed by swipe
+                if isOwn && !message.isDeleted && isRead != nil {
+                    readCheckmarks
+                        .padding(.horizontal, 4)
                 }
-                .padding(.horizontal, 4)
             }
 
             if !isOwn { Spacer(minLength: 60) }

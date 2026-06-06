@@ -361,6 +361,10 @@ final class ChatViewModel {
                 InsertAction.self, schema: "public", table: "messages",
                 filter: .eq("conversation_id", value: conversationId.uuidString)
             )
+            let messageUpdates = pg.postgresChange(
+                UpdateAction.self, schema: "public", table: "messages",
+                filter: .eq("conversation_id", value: conversationId.uuidString)
+            )
             let reactionInserts = pg.postgresChange(InsertAction.self, schema: "public", table: "message_reactions")
             let reactionDeletes = pg.postgresChange(DeleteAction.self, schema: "public", table: "message_reactions")
             let readInserts = pg.postgresChange(InsertAction.self, schema: "public", table: "message_reads")
@@ -377,6 +381,13 @@ final class ChatViewModel {
                         // Skip own inserts — sendMessage() already handles the optimistic → confirmed swap
                         if event.record["sender_id"]?.stringValue == self.currentUserId.uuidString { continue }
                         await self.handleIncomingRealtimeMessage(event.record)
+                    }
+                }
+                group.addTask {
+                    for await event in messageUpdates {
+                        // Skip own updates — deleteMessage() already mutates local state optimistically
+                        if event.record["sender_id"]?.stringValue == self.currentUserId.uuidString { continue }
+                        await self.handleMessageUpdate(event.record)
                     }
                 }
                 group.addTask { for await _ in reactionInserts { await self.loadReactionsForCurrentMessages() } }
@@ -491,6 +502,26 @@ final class ChatViewModel {
         )
         messages.append(msg)
         await markAndFetchReceipts()
+    }
+
+    private func handleMessageUpdate(_ record: [String: AnyJSON]) async {
+        guard
+            let idStr = record["id"]?.stringValue,
+            let id = UUID(uuidString: idStr)
+        else { return }
+
+        guard let idx = messages.firstIndex(where: { $0.id == id }) else { return }
+
+        let deletedAtStr = record["deleted_at"]?.stringValue
+        let deletedAt = deletedAtStr.flatMap(Self.parseRealtimeDate)
+
+        let m = messages[idx]
+        messages[idx] = DecryptedMessage(
+            id: m.id, conversationId: m.conversationId, senderId: m.senderId,
+            content: m.content, type: m.type, mediaUrl: m.mediaUrl,
+            replyToId: m.replyToId, threadId: m.threadId, editedAt: m.editedAt,
+            deletedAt: deletedAt, createdAt: m.createdAt, senderProfile: m.senderProfile
+        )
     }
 
     // Supabase Realtime sends timestamptz as ISO8601 with optional fractional seconds.

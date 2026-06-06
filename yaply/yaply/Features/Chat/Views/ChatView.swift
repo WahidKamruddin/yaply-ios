@@ -16,6 +16,7 @@ struct ChatView: View {
     @State private var searchIsActive = false
     @State private var searchQuery = ""
     @State private var showGroupInfo = false
+    @State private var swipeOffset: CGFloat = 0
     @Environment(AppRouter.self) private var router
 
     private let convRepository = ConversationRepository()
@@ -103,7 +104,8 @@ struct ChatView: View {
                                         onReact: { msgId, emoji in vm.toggleReaction(messageId: msgId, emoji: emoji) },
                                         onOpenThread: { threadRoot = $0 },
                                         onReplyInThread: { threadRoot = $0 },
-                                        onQuotationClick: { id in scrollToId = id }
+                                        onQuotationClick: { id in scrollToId = id },
+                                        swipeOffset: swipeOffset
                                     )
                                     .id(msg.id)
                                     .background(highlightedId == msg.id ? Color.yaplyAccent.opacity(0.12) : Color.clear)
@@ -129,6 +131,20 @@ struct ChatView: View {
                         }
                         .padding(.vertical, 8)
                     }
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 10)
+                            .onChanged { value in
+                                let dx = value.translation.width
+                                let dy = value.translation.height
+                                guard abs(dx) > abs(dy) else { return }
+                                swipeOffset = max(-65, min(0, dx))
+                            }
+                            .onEnded { _ in
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                                    swipeOffset = 0
+                                }
+                            }
+                    )
                     .onChange(of: vm.messages.count) { _, _ in
                         withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                     }
