@@ -84,11 +84,18 @@ struct ConversationListView: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(filtered) { item in
-                                Button(action: { router.push(.conversation(id: item.id)) }) {
-                                    ConversationRowView(item: item, currentUserId: currentUserId)
+                                SwipeToDeleteConversationRow(
+                                    onDelete: {
+                                        guard let uid = vm.currentUserId else { return }
+                                        Task { await vm.deleteConversation(id: item.id, userId: uid) }
+                                    }
+                                ) {
+                                    Button(action: { router.push(.conversation(id: item.id)) }) {
+                                        ConversationRowView(item: item, currentUserId: currentUserId)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .contextMenu { muteMenu(for: item) }
                                 }
-                                .buttonStyle(.plain)
-                                .contextMenu { muteMenu(for: item) }
                                 Divider()
                                     .padding(.leading, 76)
                                     .foregroundStyle(Color.yaplyBorder)
@@ -131,6 +138,8 @@ struct ConversationListView: View {
         }
         .refreshable { await vm.refresh(userId: currentUserId) }
     }
+
+    // MARK: - Delete helpers
 
     // MARK: - Mute helpers
 
@@ -212,6 +221,70 @@ struct ConversationListView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(Color.white)
+        }
+    }
+}
+
+// MARK: - Swipe-to-delete row wrapper
+
+private struct SwipeToDeleteConversationRow<Content: View>: View {
+    let onDelete: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    private let revealWidth: CGFloat = 68
+    private let threshold: CGFloat = 36
+
+    @State private var offset: CGFloat = 0
+    @State private var showConfirm = false
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            // Red trash area revealed by swipe
+            Button {
+                showConfirm = true
+            } label: {
+                Image(systemName: "trash.fill")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: revealWidth)
+                    .frame(maxHeight: .infinity)
+            }
+            .background(Color.red)
+            .opacity(offset < 0 ? 1 : 0)
+
+            content()
+                .background(Color.white)
+                .offset(x: offset)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 10)
+                        .onChanged { value in
+                            let dx = value.translation.width
+                            let dy = value.translation.height
+                            guard abs(dx) > abs(dy) else { return }
+                            if dx < 0 {
+                                offset = max(-revealWidth, dx)
+                            } else if offset < 0 {
+                                offset = min(0, offset + dx)
+                            }
+                        }
+                        .onEnded { _ in
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                                offset = offset < -threshold ? -revealWidth : 0
+                            }
+                        }
+                )
+        }
+        .clipped()
+        .alert("Delete Conversation", isPresented: $showConfirm) {
+            Button("Delete", role: .destructive) {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) { offset = 0 }
+                onDelete()
+            }
+            Button("Cancel", role: .cancel) {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) { offset = 0 }
+            }
+        } message: {
+            Text("This will remove the conversation from your list.")
         }
     }
 }

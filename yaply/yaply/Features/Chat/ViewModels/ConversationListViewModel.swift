@@ -32,6 +32,16 @@ final class ConversationListViewModel {
         }
     }
 
+    func deleteConversation(id: UUID, userId: UUID) async {
+        conversations.removeAll { $0.id == id }
+        do {
+            try await repository.deleteConversation(conversationId: id, userId: userId)
+        } catch {
+            self.error = error.localizedDescription
+            await refresh(userId: userId)
+        }
+    }
+
     // Realtime: watch for new messages and profile presence changes to refresh the list
     private func startRealtime(userId: UUID) {
         realtimeTask?.cancel()

@@ -274,6 +274,15 @@ final class ConversationRepository {
             .execute()
     }
 
+    func deleteConversation(conversationId: UUID, userId: UUID) async throws {
+        try await supabase
+            .from("conversation_members")
+            .delete()
+            .eq("conversation_id", value: conversationId.uuidString)
+            .eq("user_id", value: userId.uuidString)
+            .execute()
+    }
+
     func markRead(conversationId: UUID, userId: UUID) async throws {
         struct ReadUpdate: Encodable {
             let last_read_at: String

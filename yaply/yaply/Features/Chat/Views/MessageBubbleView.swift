@@ -19,6 +19,9 @@ struct MessageBubbleView: View {
     var swipeOffset: CGFloat = 0
 
     @State private var showDeleteConfirmation = false
+    @State private var replyDragOffset: CGFloat = 0
+    @State private var hasTriggeredReply = false
+    @State private var bubbleWidth: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -47,74 +50,114 @@ struct MessageBubbleView: View {
                 )
             }
 
-            VStack(alignment: isOwn ? .trailing : .leading, spacing: 4) {
-                if !isOwn, let profile = message.senderProfile {
-                    Text(profile.name)
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundStyle(Color.yaplyTertiary)
-                        .padding(.leading, 4)
-                }
-
-                if let reply = replyMessage {
-                    replyBlock(reply)
-                        .frame(maxWidth: 180, alignment: isOwn ? .trailing : .leading)
-                }
-
-                bubbleContent
-                    .contextMenu {
-                        if !message.isDeleted {
-                            Section("React") {
-                                ForEach(quickEmojis, id: \.self) { emoji in
-                                    Button(emoji) { onReact?(message.id, emoji) }
-                                }
-                            }
-                            Section {
-                                Button { onReply(message) } label: {
-                                    Label("Reply", systemImage: "arrowshape.turn.up.left")
-                                }
-                                Button { onReplyInThread?(message) } label: {
-                                    Label("Reply in Thread", systemImage: "bubble.left.and.bubble.right")
-                                }
-                                if isOwn {
-                                    Button("Delete", role: .destructive) { showDeleteConfirmation = true }
-                                }
-                            }
-                        }
-                    }
-                    .alert("Delete Message", isPresented: $showDeleteConfirmation) {
-                        Button("Delete", role: .destructive) { onDelete(message.id) }
-                        Button("Cancel", role: .cancel) { }
-                    } message: {
-                        Text("This will delete the message for everyone.")
-                    }
-
-                if !reactions.isEmpty {
-                    reactionPills
-                }
-
-                if threadCount > 0 {
-                    Button {
-                        onOpenThread?(message)
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "bubble.left.and.bubble.right")
-                                .font(.system(size: 10))
-                            Text("\(threadCount) \(threadCount == 1 ? "reply" : "replies") · Open thread")
-                                .font(.system(size: 11))
-                        }
+            // ZStack lets the reply icon sit behind the bubble column.
+            // As the VStack shifts right, the icon is revealed at the leading edge.
+            ZStack(alignment: .leading) {
+                if !isOwn {
+                    Image(systemName: "arrowshape.turn.up.left.fill")
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(Color.yaplyAccent)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 4)
-                    .padding(.top, 2)
+                        .opacity(Double(min(1, replyDragOffset / 50)))
+                        .scaleEffect(min(1.0, max(0.4, replyDragOffset / 50)))
                 }
 
-                // Read checkmarks only — timestamp revealed by swipe
-                if isOwn && !message.isDeleted && isRead != nil {
-                    readCheckmarks
+                VStack(alignment: isOwn ? .trailing : .leading, spacing: 4) {
+                    if !isOwn, let profile = message.senderProfile {
+                        Text(profile.name)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundStyle(Color.yaplyTertiary)
+                            .padding(.leading, 4)
+                    }
+
+                    if let reply = replyMessage {
+                        replyBlock(reply)
+                            .frame(minWidth: bubbleWidth)
+                    }
+
+                    bubbleContent
+                        .overlay(
+                            GeometryReader { geo in
+                                Color.clear.preference(key: BubbleWidthKey.self, value: geo.size.width)
+                            }
+                        )
+                        .contextMenu {
+                            if !message.isDeleted {
+                                Section("React") {
+                                    ForEach(quickEmojis, id: \.self) { emoji in
+                                        Button(emoji) { onReact?(message.id, emoji) }
+                                    }
+                                }
+                                Section {
+                                    Button { onReply(message) } label: {
+                                        Label("Reply", systemImage: "arrowshape.turn.up.left")
+                                    }
+                                    Button { onReplyInThread?(message) } label: {
+                                        Label("Reply in Thread", systemImage: "bubble.left.and.bubble.right")
+                                    }
+                                    if isOwn {
+                                        Button("Delete", role: .destructive) { showDeleteConfirmation = true }
+                                    }
+                                }
+                            }
+                        }
+                        .alert("Delete Message", isPresented: $showDeleteConfirmation) {
+                            Button("Delete", role: .destructive) { onDelete(message.id) }
+                            Button("Cancel", role: .cancel) { }
+                        } message: {
+                            Text("This will delete the message for everyone.")
+                        }
+
+                    if !reactions.isEmpty {
+                        reactionPills
+                    }
+
+                    if threadCount > 0 {
+                        Button {
+                            onOpenThread?(message)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "bubble.left.and.bubble.right")
+                                    .font(.system(size: 10))
+                                Text("\(threadCount) \(threadCount == 1 ? "reply" : "replies") · Open thread")
+                                    .font(.system(size: 11))
+                            }
+                            .foregroundStyle(Color.yaplyAccent)
+                        }
+                        .buttonStyle(.plain)
                         .padding(.horizontal, 4)
+                        .padding(.top, 2)
+                    }
+
+                    // Read checkmarks only — timestamp revealed by swipe
+                    if isOwn && !message.isDeleted && isRead != nil {
+                        readCheckmarks
+                            .padding(.horizontal, 4)
+                    }
                 }
+                .onPreferenceChange(BubbleWidthKey.self) { bubbleWidth = $0 }
+                .offset(x: !isOwn ? replyDragOffset : 0)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 10)
+                        .onChanged { value in
+                            guard !isOwn, !message.isDeleted else { return }
+                            let dx = value.translation.width
+                            let dy = value.translation.height
+                            guard abs(dx) > abs(dy), dx > 0 else { return }
+                            replyDragOffset = min(60, dx)
+                            if replyDragOffset >= 55 && !hasTriggeredReply {
+                                hasTriggeredReply = true
+                                onReply(message)
+                            }
+                        }
+                        .onEnded { _ in
+                            guard !isOwn else { return }
+                            hasTriggeredReply = false
+                            withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                                replyDragOffset = 0
+                            }
+                        }
+                )
             }
 
             if !isOwn { Spacer(minLength: 60) }
@@ -215,33 +258,33 @@ struct MessageBubbleView: View {
 
     // MARK: - Reply preview block
 
-    @ViewBuilder
     private func replyBlock(_ reply: DecryptedMessage) -> some View {
         Button {
             onQuotationClick?(reply.id)
         } label: {
-            HStack(spacing: 0) {
-                Rectangle()
+            HStack(spacing: 2) {
+                RoundedRectangle(cornerRadius: 1)
                     .fill(Color.yaplyAccent)
-                    .frame(width: 2)
-                    .padding(.vertical, 4)
+                    .frame(width: 2, height: 22)
+                    .padding(.horizontal, 6)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(reply.senderProfile?.name ?? "Unknown")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.yaplyAccent)
-                    Text(reply.isMedia ? "📷 Photo" : String(reply.content.prefix(40)))
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color.yaplySecondary)
+                        .lineLimit(1)
+                    Text(reply.isDeleted ? "Message deleted" : reply.isMedia ? "📷 Photo" : String(reply.content.prefix(60)))
+                        .font(.system(size: 12))
+                        .italic(reply.isDeleted)
+                        .foregroundStyle(reply.isDeleted ? Color.yaplySecondary.opacity(0.7) : Color.yaplySecondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
-                .padding(.leading, 4)
-                .padding(.vertical, 4)
-                .padding(.trailing, 6)
+                .padding(.trailing, 14)
             }
-            .background(Color(.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yaplyBorder, lineWidth: 0.5))
+            .frame(height: 36)
+            .background(Color(red: 0.941, green: 0.957, blue: 1.0))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(red: 0.863, green: 0.906, blue: 0.973), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
     }
@@ -284,6 +327,13 @@ private struct BubbleShape: Shape {
         path.addQuadCurve(to: CGPoint(x: tl.x + radius, y: tl.y), control: tl)
         path.closeSubpath()
         return path
+    }
+}
+
+private struct BubbleWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 

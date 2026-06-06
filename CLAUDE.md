@@ -48,7 +48,7 @@ The migrations in `../supabase/migrations/` match the live database. Use the col
 
 **conversations:** `id, type ('direct'|'group'|'ai'), name, avatar_url, created_by, created_at, updated_at`
 
-**conversation_members:** `conversation_id, user_id, role ('owner'|'admin'|'member'), joined_at, last_read_at`
+**conversation_members:** `conversation_id, user_id, role ('owner'|'admin'|'member'), joined_at, last_read_at, muted_until (timestamptz — null = not muted, future = muted until then, very far future = forever)`
 
 **messages:** `id, conversation_id, sender_id, type ('text'|'image'|'gif'|...), content (base64 ciphertext+tag), iv (base64 nonce[12]; nil = phase-1), media_url, media_mime, reply_to_id, thread_id, edited_at, deleted_at, created_at`
 - Joined via: `profiles!messages_sender_id_fkey`
@@ -153,3 +153,40 @@ GIPHY_API_KEY = your-giphy-key
 - **Encryption init** runs on `AuthService` login — generates keypair if none exists, upserts public key to `devices` table
 - **Message decryption** happens in `ChatViewModel` after fetching — never store or render raw ciphertext
 - **`YaplyTask`** (not `Task`) — named to avoid collision with Swift's concurrency `Task` type
+- **JWK decoding:** The `devices.identity_key` JSON includes extra fields (`ext: Bool`, `key_ops: [String]`) beyond x/y. Decode with a dedicated struct `struct JWKCoords: Decodable { let x: String; let y: String }` — not `[String: String]`, which will fail to decode.
+- **Phase-1 multi-byte encoding:** Use `Data(plaintext.utf8).base64EncodedString()` for encoding and `String(data: decodedData, encoding: .utf8)` for decoding. Never use Latin-1 byte-by-byte methods — they break on emoji and non-ASCII characters.
+- **Conversation delete = membership delete only:** `ConversationRepository.deleteConversation` deletes the user's own row from `conversation_members`. A Postgres trigger (`trg_delete_empty_conversation`) cascades to deleting the conversation record if no members remain.
+
+---
+
+## Tier 2 Implemented Features
+
+### Realtime Message Deletion Propagation
+
+`ChatViewModel.startRealtime()` subscribes to both `InsertAction` and `UpdateAction` on the `messages` table filtered by `conversation_id`. When a remote user deletes a message (which sets `deleted_at`), the `UpdateAction` fires. `handleMessageUpdate(_:)` finds the message by ID and rebuilds the `DecryptedMessage` with the new `deletedAt` value — no re-fetch needed.
+
+Own-message updates are skipped (`sender_id == currentUserId`) to avoid double-processing local optimistic updates.
+
+### Message Bubble Actions
+
+- **Delete (own messages only):** Long-press context menu shows "Delete" option. Tapping shows a native `.alert("Delete Message", ...)` with a destructive "Delete" button. Confirmed deletes call `onDelete(message.id)`.
+- **Reply (other users' messages):** Swipe right on the message bubble only (not the full row). Implemented as a `simultaneousGesture(DragGesture)` scoped to the bubble `VStack`. The gesture reveals a reply icon via `ZStack(alignment: .leading)` — icon sits behind the VStack at x=0; as the bubble slides right the icon is exposed. Triggers `onReply(message)` at 55pt drag distance; springs back to 0 on gesture end.
+- **Timestamp:** Swipe left on own message bubbles reveals the timestamp. `ChatView` manages a single `swipeOffset: CGFloat` state passed as binding; only one timestamp shows at a time.
+
+### Reply Quotation Bubble
+
+The reply block appears above the message content inside the bubble. It uses a compact `HStack` with:
+- A 2×22pt `RoundedRectangle` accent bar (sender's color)
+- Sender name in small semibold
+- Preview text: `"📷 Photo"` for media, italic `"Message deleted"` in `yaplySecondary.opacity(0.7)` if `reply.isDeleted`, otherwise first 60 chars of content
+- Fixed `frame(height: 36)` on the HStack — **critical**: without an explicit height, `Rectangle()` in a ScrollView context expands to fill infinite proposed height
+- `frame(maxWidth: 180)` on the `Button` to prevent it from stretching full width
+
+### Conversation Swipe-to-Delete
+
+`SwipeToDeleteConversationRow` (private struct in `ConversationListView.swift`) wraps each row with:
+- A `ZStack(alignment: .trailing)` — red trash `Button` behind, content in front
+- `simultaneousGesture(DragGesture(minimumDistance: 10))` on the content — left-swipe only; threshold 36pt, reveal width 68pt; springs back on gesture end
+- `.alert("Delete Conversation", ...)` with a destructive "Delete" button that calls `onDelete()` and springs the offset back to 0
+
+`ConversationListViewModel.deleteConversation(id:userId:)` removes the conversation optimistically from the local array, then calls `ConversationRepository.deleteConversation` (deletes own `conversation_members` row). On error it refreshes from the server to revert.
