@@ -21,7 +21,6 @@ struct MessageBubbleView: View {
     @State private var showDeleteConfirmation = false
     @State private var replyDragOffset: CGFloat = 0
     @State private var hasTriggeredReply = false
-    @State private var bubbleWidth: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -72,15 +71,9 @@ struct MessageBubbleView: View {
 
                     if let reply = replyMessage {
                         replyBlock(reply)
-                            .frame(minWidth: bubbleWidth)
                     }
 
                     bubbleContent
-                        .overlay(
-                            GeometryReader { geo in
-                                Color.clear.preference(key: BubbleWidthKey.self, value: geo.size.width)
-                            }
-                        )
                         .contextMenu {
                             if !message.isDeleted {
                                 Section("React") {
@@ -135,7 +128,6 @@ struct MessageBubbleView: View {
                             .padding(.horizontal, 4)
                     }
                 }
-                .onPreferenceChange(BubbleWidthKey.self) { bubbleWidth = $0 }
                 .offset(x: !isOwn ? replyDragOffset : 0)
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 10)
@@ -327,13 +319,6 @@ private struct BubbleShape: Shape {
         path.addQuadCurve(to: CGPoint(x: tl.x + radius, y: tl.y), control: tl)
         path.closeSubpath()
         return path
-    }
-}
-
-private struct BubbleWidthKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
     }
 }
 
