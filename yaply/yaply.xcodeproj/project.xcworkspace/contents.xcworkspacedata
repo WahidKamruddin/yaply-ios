@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Workspace
+   version = "1.0">
+   <FileRef
+      location = "self:">
+   </FileRef>
+   <FileRef
+      location = "group:AuthService.swift">
+   </FileRef>
+   <FileRef
+      location = "group:SupabaseClient.swift">
+   </FileRef>
+   <FileRef
+      location = "group:AuthService 2.swift">
+   </FileRef>
+   <FileRef
+      location = "group:SupabaseClient 2.swift">
+   </FileRef>
+   <FileRef
+      location = "group:AuthService 3.swift">
+   </FileRef>
+   <FileRef
+      location = "group:SupabaseClient 3.swift">
+   </FileRef>
+   <FileRef
+      location = "group:ConversationRepository.swift">
+   </FileRef>
+   <FileRef
+      location = "group:PresenceService.swift">
+   </FileRef>
+   <FileRef
+      location = "group:ConversationRepository 2.swift">
+   </FileRef>
+   <FileRef
+      location = "group:ConversationRepository 3.swift">
+   </FileRef>
+   <FileRef
+      location = "group:ConversationRepository 4.swift">
+   </FileRef>
+   <FileRef
+      location = "group:YaplyApp.swift">
+   </FileRef>
+</Workspace>
