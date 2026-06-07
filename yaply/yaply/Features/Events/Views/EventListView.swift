@@ -87,6 +87,10 @@ struct EventListView: View {
             }
         }
         .task { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .yaplyItemCreated)) { notif in
+            guard (notif.userInfo?["type"] as? String) == "events" else { return }
+            Task { await load() }
+        }
         .sheet(item: $selectedEvent) { event in
             EventDetailSheet(event: event, currentUserId: currentUserId)
         }

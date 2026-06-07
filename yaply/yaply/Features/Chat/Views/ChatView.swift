@@ -363,6 +363,7 @@ struct ChatView: View {
             do {
                 let msg = try await RemindHandler.execute(args: cmd.args, conversationId: conversationId, userId: currentUserId)
                 showCommandFeedback(msg)
+                NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "reminders"])
             } catch {
                 showCommandFeedback(error.localizedDescription)
             }
@@ -406,15 +407,19 @@ struct ChatView: View {
         case "task":
             try? await TaskRepository().createTask(conversationId: conversationId, createdBy: currentUserId, title: title)
             showCommandFeedback("✓ Task created: \(title)")
+            NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "tasks"])
         case "note":
             try? await NoteRepository().createNote(conversationId: conversationId, userId: currentUserId, title: title)
             showCommandFeedback("✓ Note created: \(title)")
+            NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "notes"])
         case "album":
             try? await AlbumRepository().createAlbum(conversationId: conversationId, createdBy: currentUserId, name: title)
             showCommandFeedback("✓ Album created: \(title)")
+            NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "albums"])
         case "plan":
             try? await EventRepository().createEvent(conversationId: conversationId, createdBy: currentUserId, name: title, status: "planning")
             showCommandFeedback("✓ Plan created: \(title)")
+            NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "events"])
         default:
             break
         }

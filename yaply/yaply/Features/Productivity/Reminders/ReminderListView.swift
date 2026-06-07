@@ -54,6 +54,10 @@ struct ReminderListView: View {
         .navigationTitle("Reminders")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .yaplyItemCreated)) { notif in
+            guard (notif.userInfo?["type"] as? String) == "reminders" else { return }
+            Task { await load() }
+        }
         .alert("Dismiss Reminder", isPresented: Binding(
             get: { reminderToDismiss != nil },
             set: { if !$0 { reminderToDismiss = nil } }

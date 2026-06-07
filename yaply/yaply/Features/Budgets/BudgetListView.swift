@@ -63,6 +63,10 @@ struct BudgetListView: View {
             }
         }
         .task { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .yaplyItemCreated)) { notif in
+            guard (notif.userInfo?["type"] as? String) == "budgets" else { return }
+            Task { await load() }
+        }
         .sheet(isPresented: $showCreate) {
             createSheet
         }
