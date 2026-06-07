@@ -261,4 +261,26 @@ final class EventRepository {
             )
             .execute()
     }
+
+    // MARK: - Linked Resources
+
+    func fetchLinkedAlbums(eventId: UUID) async throws -> [YaplyAlbum] {
+        return try await supabase
+            .from("albums")
+            .select("*, creator:profiles!albums_created_by_fkey(display_name, username), album_media(media_url)")
+            .eq("event_id", value: eventId.uuidString)
+            .order("created_at", ascending: false)
+            .execute()
+            .value
+    }
+
+    func fetchLinkedBudgets(eventId: UUID) async throws -> [YaplyBudget] {
+        return try await supabase
+            .from("budgets")
+            .select("*, creator:profiles!budgets_created_by_fkey(display_name, username)")
+            .eq("event_id", value: eventId.uuidString)
+            .order("created_at", ascending: false)
+            .execute()
+            .value
+    }
 }

@@ -9,12 +9,23 @@ struct YaplyAlbum: Codable, Identifiable {
     let createdBy: UUID
     let createdAt: Date
     var creator: CreatorProfile?
+    var eventId: UUID?
+    var albumMedia: [AlbumMediaThumb]?
+
+    struct AlbumMediaThumb: Codable {
+        let mediaUrl: String
+        enum CodingKeys: String, CodingKey { case mediaUrl = "media_url" }
+    }
+
+    var coverUrl: String? { albumMedia?.first?.mediaUrl }
 
     enum CodingKeys: String, CodingKey {
         case id, name, creator
         case conversationId = "conversation_id"
         case createdBy      = "created_by"
         case createdAt      = "created_at"
+        case eventId        = "event_id"
+        case albumMedia     = "album_media"
     }
 }
 
@@ -40,22 +51,23 @@ final class AlbumRepository {
     func fetchAlbums(conversationId: UUID) async throws -> [YaplyAlbum] {
         return try await supabase
             .from("albums")
-            .select("*, creator:profiles!albums_created_by_fkey(display_name, username)")
+            .select("*, creator:profiles!albums_created_by_fkey(display_name, username), album_media(media_url)")
             .eq("conversation_id", value: conversationId.uuidString)
             .order("created_at", ascending: false)
             .execute()
             .value
     }
 
-    func createAlbum(conversationId: UUID, createdBy: UUID, name: String) async throws -> YaplyAlbum {
+    func createAlbum(conversationId: UUID, createdBy: UUID, name: String, eventId: UUID? = nil) async throws -> YaplyAlbum {
         struct Insert: Encodable {
             let conversation_id: String
             let created_by: String
             let name: String
+            let event_id: String?
         }
         return try await supabase
             .from("albums")
-            .insert(Insert(conversation_id: conversationId.uuidString, created_by: createdBy.uuidString, name: name))
+            .insert(Insert(conversation_id: conversationId.uuidString, created_by: createdBy.uuidString, name: name, event_id: eventId?.uuidString))
             .select()
             .single()
             .execute()
@@ -70,12 +82,30 @@ final class AlbumRepository {
             .execute()
     }
 
+    func linkToEvent(albumId: UUID, eventId: UUID) async throws {
+        struct Update: Encodable { let event_id: String }
+        try await supabase
+            .from("albums")
+            .update(Update(event_id: eventId.uuidString))
+            .eq("id", value: albumId.uuidString)
+            .execute()
+    }
+
+    func unlinkFromEvent(albumId: UUID) async throws {
+        struct Update: Encodable { let event_id: String? }
+        try await supabase
+            .from("albums")
+            .update(Update(event_id: nil))
+            .eq("id", value: albumId.uuidString)
+            .execute()
+    }
+
     func fetchMedia(albumId: UUID) async throws -> [YaplyAlbumMedia] {
         return try await supabase
             .from("album_media")
             .select()
             .eq("album_id", value: albumId.uuidString)
-            .order("created_at", ascending: false)
+            .order("created_at", ascending: true)
             .execute()
             .value
     }

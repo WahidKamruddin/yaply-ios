@@ -365,6 +365,7 @@ struct AvailabilityCalendarView: View {
         isSaving = false
     }
 
+    @MainActor
     private func doConfirm(_ slot: String) async {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
