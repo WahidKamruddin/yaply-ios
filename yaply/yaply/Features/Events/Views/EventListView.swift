@@ -10,6 +10,7 @@ struct EventListView: View {
     @State private var eventToDelete: YaplyEvent?
     @State private var selectedEvent: YaplyEvent?
     @State private var createStatus: String = "planning"
+    @State private var filter: String = "all"
     @State private var newName = ""
     @State private var newLocation = ""
     @State private var newStartsAt = Date().addingTimeInterval(3600)
@@ -17,8 +18,13 @@ struct EventListView: View {
 
     private let repo = EventRepository()
 
-    private var confirmed: [YaplyEvent] { events.filter { $0.isConfirmed } }
-    private var planning: [YaplyEvent] { events.filter { $0.isPlanning } }
+    private var filteredEvents: [YaplyEvent] {
+        switch filter {
+        case "planning":  return events.filter { $0.isPlanning }
+        case "confirmed": return events.filter { $0.isConfirmed }
+        default:          return events
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -32,47 +38,40 @@ struct EventListView: View {
                 } else if events.isEmpty {
                     emptyState
                 } else {
-                    List {
-                        if !confirmed.isEmpty {
-                            Section("Confirmed") {
-                                ForEach(confirmed) { event in
-                                    Button(action: { selectedEvent = event }) {
-                                        EventRowView(event: event)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                        let isCreator = event.createdBy == currentUserId
-                                        Button(role: isCreator ? .destructive : .none) {
-                                            if isCreator { eventToDelete = event }
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
-                                        }
-                                        .tint(isCreator ? .red : Color(UIColor.systemGray4))
-                                    }
-                                }
-                            }
-                        }
-                        if !planning.isEmpty {
-                            Section("Planning") {
-                                ForEach(planning) { event in
-                                    Button(action: { selectedEvent = event }) {
-                                        EventRowView(event: event)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                        let isCreator = event.createdBy == currentUserId
-                                        Button(role: isCreator ? .destructive : .none) {
-                                            if isCreator { eventToDelete = event }
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
-                                        }
-                                        .tint(isCreator ? .red : Color(UIColor.systemGray4))
-                                    }
-                                }
-                            }
-                        }
+                    Picker("Filter", selection: $filter) {
+                        Text("All").tag("all")
+                        Text("Planning").tag("planning")
+                        Text("Confirmed").tag("confirmed")
                     }
-                    .listStyle(.insetGrouped)
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+
+                    if filteredEvents.isEmpty {
+                        Spacer()
+                        Text("No \(filter) events")
+                            .foregroundStyle(Color.yaplySecondary)
+                        Spacer()
+                    } else {
+                        List {
+                            ForEach(filteredEvents) { event in
+                                Button(action: { selectedEvent = event }) {
+                                    EventRowView(event: event)
+                                }
+                                .buttonStyle(.plain)
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    let isCreator = event.createdBy == currentUserId
+                                    Button(role: isCreator ? .destructive : .none) {
+                                        if isCreator { eventToDelete = event }
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                    .tint(isCreator ? .red : Color(UIColor.systemGray4))
+                                }
+                            }
+                        }
+                        .listStyle(.insetGrouped)
+                    }
                 }
             }
         }
@@ -215,15 +214,15 @@ private struct EventRowView: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.yaplyPrimary)
                 HStack(spacing: 6) {
-                    Text(event.isPlanning ? "Planning" : "Confirmed")
-                        .font(.system(size: 11, weight: .semibold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(event.isPlanning
-                            ? Color(red: 0.929, green: 0.945, blue: 0.980)
-                            : Color(red: 0.9, green: 0.97, blue: 0.9))
-                        .foregroundStyle(event.isPlanning ? Color.yaplyAccent : Color.green)
-                        .clipShape(Capsule())
+                    if event.isPlanning {
+                        Text("Planning")
+                            .font(.system(size: 11, weight: .semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(red: 0.929, green: 0.945, blue: 0.980))
+                            .foregroundStyle(Color.yaplyAccent)
+                            .clipShape(Capsule())
+                    }
                     if let starts = event.startsAt, event.isConfirmed {
                         Text(starts.formatted(.dateTime.month(.abbreviated).day()))
                             .font(.system(size: 11))

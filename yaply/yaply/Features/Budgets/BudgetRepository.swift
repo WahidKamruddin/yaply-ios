@@ -11,6 +11,7 @@ struct YaplyBudget: Codable, Identifiable {
     let createdBy: UUID
     let createdAt: Date
     var creator: CreatorProfile?
+    var eventId: UUID?
 
     enum CodingKeys: String, CodingKey {
         case id, name, currency, creator
@@ -18,6 +19,7 @@ struct YaplyBudget: Codable, Identifiable {
         case totalAmount    = "total_amount"
         case createdBy      = "created_by"
         case createdAt      = "created_at"
+        case eventId        = "event_id"
     }
 }
 
@@ -49,17 +51,18 @@ final class BudgetRepository {
             .value
     }
 
-    func createBudget(conversationId: UUID, createdBy: UUID, name: String, totalAmount: Double, currency: String = "USD") async throws -> YaplyBudget {
+    func createBudget(conversationId: UUID, createdBy: UUID, name: String, totalAmount: Double, currency: String = "USD", eventId: UUID? = nil) async throws -> YaplyBudget {
         struct Insert: Encodable {
             let conversation_id: String
             let created_by: String
             let name: String
             let total_amount: Double
             let currency: String
+            let event_id: String?
         }
         return try await supabase
             .from("budgets")
-            .insert(Insert(conversation_id: conversationId.uuidString, created_by: createdBy.uuidString, name: name, total_amount: totalAmount, currency: currency))
+            .insert(Insert(conversation_id: conversationId.uuidString, created_by: createdBy.uuidString, name: name, total_amount: totalAmount, currency: currency, event_id: eventId?.uuidString))
             .select()
             .single()
             .execute()
@@ -71,6 +74,24 @@ final class BudgetRepository {
             .from("budgets")
             .delete()
             .eq("id", value: id.uuidString)
+            .execute()
+    }
+
+    func linkToEvent(budgetId: UUID, eventId: UUID) async throws {
+        struct Update: Encodable { let event_id: String }
+        try await supabase
+            .from("budgets")
+            .update(Update(event_id: eventId.uuidString))
+            .eq("id", value: budgetId.uuidString)
+            .execute()
+    }
+
+    func unlinkFromEvent(budgetId: UUID) async throws {
+        struct Update: Encodable { let event_id: String? }
+        try await supabase
+            .from("budgets")
+            .update(Update(event_id: nil))
+            .eq("id", value: budgetId.uuidString)
             .execute()
     }
 

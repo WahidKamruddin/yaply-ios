@@ -5,14 +5,17 @@ struct BudgetListView: View {
     let currentUserId: UUID
 
     @State private var budgets: [YaplyBudget] = []
+    @State private var events: [YaplyEvent] = []
     @State private var isLoading = false
     @State private var showCreate = false
     @State private var budgetToDelete: YaplyBudget?
+    @State private var budgetToLink: YaplyBudget?
     @State private var newName = ""
     @State private var newAmount = ""
     @State private var newCurrency = "USD"
 
     private let repo = BudgetRepository()
+    private let eventRepo = EventRepository()
 
     var body: some View {
         ZStack {
@@ -36,15 +39,33 @@ struct BudgetListView: View {
                 } else {
                     List {
                         ForEach(budgets) { budget in
-                            BudgetRowView(budget: budget)
+                            BudgetRowView(budget: budget, events: events)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    let isCreator = budget.createdBy == currentUserId
-                                    Button(role: isCreator ? .destructive : .none) {
-                                        if isCreator { budgetToDelete = budget }
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
+                                    if budget.createdBy == currentUserId {
+                                        Button(role: .destructive) {
+                                            budgetToDelete = budget
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
                                     }
-                                    .tint(isCreator ? .red : Color(UIColor.systemGray4))
+                                    if budget.eventId != nil {
+                                        Button {
+                                            Task {
+                                                try? await repo.unlinkFromEvent(budgetId: budget.id)
+                                                await load()
+                                            }
+                                        } label: {
+                                            Label("Unlink", systemImage: "link.badge.minus")
+                                        }
+                                        .tint(.orange)
+                                    } else {
+                                        Button {
+                                            budgetToLink = budget
+                                        } label: {
+                                            Label("Link Event", systemImage: "link")
+                                        }
+                                        .tint(Color.yaplyAccent)
+                                    }
                                 }
                         }
                     }
@@ -69,6 +90,20 @@ struct BudgetListView: View {
         }
         .sheet(isPresented: $showCreate) {
             createSheet
+        }
+        .sheet(item: $budgetToLink) { budget in
+            EventLinkPickerSheet(
+                title: "Link \"\(budget.name)\"",
+                events: events,
+                onSelect: { event in
+                    Task {
+                        try? await repo.linkToEvent(budgetId: budget.id, eventId: event.id)
+                        budgetToLink = nil
+                        await load()
+                    }
+                },
+                onCancel: { budgetToLink = nil }
+            )
         }
         .alert("Delete Budget", isPresented: Binding(
             get: { budgetToDelete != nil },
@@ -127,13 +162,22 @@ struct BudgetListView: View {
 
     private func load() async {
         isLoading = true
-        budgets = (try? await repo.fetchBudgets(conversationId: conversationId)) ?? []
+        async let budgetFetch = repo.fetchBudgets(conversationId: conversationId)
+        async let eventFetch  = eventRepo.fetchEvents(conversationId: conversationId)
+        budgets = (try? await budgetFetch) ?? []
+        events  = (try? await eventFetch)  ?? []
         isLoading = false
     }
 }
 
 private struct BudgetRowView: View {
     let budget: YaplyBudget
+    let events: [YaplyEvent]
+
+    private var linkedEventName: String? {
+        guard let eid = budget.eventId else { return nil }
+        return events.first { $0.id == eid }?.name
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -149,14 +193,19 @@ private struct BudgetRowView: View {
                 Text(budget.name)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.yaplyPrimary)
-                HStack(spacing: 4) {
-                    Text("by \(budget.creator?.name ?? "Unknown")")
-                    Text("·")
-                        .foregroundStyle(Color.yaplySecondary.opacity(0.4))
-                    Text("\(budget.currency) \(String(format: "%.2f", budget.totalAmount))")
+                if let eventName = linkedEventName {
+                    Label(eventName, systemImage: "link")
+                        .font(.caption)
+                        .foregroundStyle(Color.yaplyAccent)
+                } else {
+                    HStack(spacing: 4) {
+                        Text("by \(budget.creator?.name ?? "Unknown")")
+                        Text("·").foregroundStyle(Color.yaplySecondary.opacity(0.4))
+                        Text("\(budget.currency) \(String(format: "%.2f", budget.totalAmount))")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(Color.yaplySecondary)
                 }
-                .font(.caption)
-                .foregroundStyle(Color.yaplySecondary)
             }
         }
         .padding(.vertical, 2)
