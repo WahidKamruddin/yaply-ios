@@ -70,4 +70,12 @@ final class TaskRepository {
             .eq("id", value: taskId.uuidString)
             .execute()
     }
+
+    func deleteTask(id: UUID) async throws {
+        try await supabase
+            .from("tasks")
+            .delete()
+            .eq("id", value: id.uuidString)
+            .execute()
+    }
 }

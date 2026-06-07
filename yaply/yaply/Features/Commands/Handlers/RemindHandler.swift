@@ -4,46 +4,39 @@ import Supabase
 import PostgREST
 
 // Mirrors src/features/commands/handlers/remindHandler.ts
-// /remind [me|all|@user] [time] [message]  e.g. /remind me 30m Pick up groceries
+// /remind [time] [message]  e.g. /remind 30m Pick up groceries
+// Reminders are now shared — all conversation members can view.
 enum RemindHandler {
 
     static func execute(args: [String], conversationId: UUID, userId: UUID) async throws {
         guard !args.isEmpty else { return }
 
         var remaining = args
-        let targetArg = remaining.removeFirst()      // "me", "all", or "@username"
-        let timeArg = remaining.isEmpty ? "1h" : remaining.removeFirst()
+        let timeArg = remaining.removeFirst()
         let message = remaining.joined(separator: " ")
 
         let fireDate = parseTime(timeArg) ?? Date().addingTimeInterval(3600)
 
-        // Insert into reminders table
         struct ReminderInsert: Encodable {
             let conversation_id: String
-            let created_by: String
+            let user_id: String
             let message: String
             let remind_at: String
-            let target_type: String
         }
 
-        let targetType = targetArg == "all" ? "all" : targetArg.hasPrefix("@") ? "user" : "me"
         let insert = ReminderInsert(
             conversation_id: conversationId.uuidString,
-            created_by: userId.uuidString,
+            user_id: userId.uuidString,
             message: message.isEmpty ? "Reminder" : message,
-            remind_at: fireDate.iso8601,
-            target_type: targetType
+            remind_at: fireDate.iso8601
         )
 
         try await supabase.from("reminders").insert(insert).execute()
 
-        // Schedule local notification for "me" reminders
-        if targetType == "me" {
-            await scheduleLocalNotification(message: message.isEmpty ? "Reminder" : message, at: fireDate)
-        }
+        await scheduleLocalNotification(message: message.isEmpty ? "Reminder" : message, at: fireDate)
     }
 
-    private static func parseTime(_ arg: String) -> Date? {
+    static func parseTime(_ arg: String) -> Date? {
         let lower = arg.lowercased()
         let num = Double(lower.dropLast()) ?? 1
         if lower.hasSuffix("m") { return Date().addingTimeInterval(num * 60) }
