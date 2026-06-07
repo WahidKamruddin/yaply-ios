@@ -41,13 +41,13 @@ struct EventListView: View {
                                     }
                                     .buttonStyle(.plain)
                                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                        if event.createdBy == currentUserId {
-                                            Button(role: .destructive) {
-                                                eventToDelete = event
-                                            } label: {
-                                                Label("Delete", systemImage: "trash")
-                                            }
+                                        let isCreator = event.createdBy == currentUserId
+                                        Button(role: isCreator ? .destructive : .none) {
+                                            if isCreator { eventToDelete = event }
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
                                         }
+                                        .tint(isCreator ? .red : Color(UIColor.systemGray4))
                                     }
                                 }
                             }
@@ -60,13 +60,13 @@ struct EventListView: View {
                                     }
                                     .buttonStyle(.plain)
                                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                        if event.createdBy == currentUserId {
-                                            Button(role: .destructive) {
-                                                eventToDelete = event
-                                            } label: {
-                                                Label("Delete", systemImage: "trash")
-                                            }
+                                        let isCreator = event.createdBy == currentUserId
+                                        Button(role: isCreator ? .destructive : .none) {
+                                            if isCreator { eventToDelete = event }
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
                                         }
+                                        .tint(isCreator ? .red : Color(UIColor.systemGray4))
                                     }
                                 }
                             }
@@ -230,6 +230,9 @@ private struct EventRowView: View {
                             .foregroundStyle(Color.yaplySecondary)
                     }
                 }
+                Text("by \(event.creator?.name ?? "Unknown")")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.yaplySecondary.opacity(0.7))
             }
         }
         .padding(.vertical, 2)

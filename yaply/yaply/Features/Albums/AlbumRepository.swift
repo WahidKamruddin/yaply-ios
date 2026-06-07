@@ -8,9 +8,10 @@ struct YaplyAlbum: Codable, Identifiable {
     var name: String
     let createdBy: UUID
     let createdAt: Date
+    var creator: CreatorProfile?
 
     enum CodingKeys: String, CodingKey {
-        case id, name
+        case id, name, creator
         case conversationId = "conversation_id"
         case createdBy      = "created_by"
         case createdAt      = "created_at"
@@ -39,7 +40,7 @@ final class AlbumRepository {
     func fetchAlbums(conversationId: UUID) async throws -> [YaplyAlbum] {
         return try await supabase
             .from("albums")
-            .select()
+            .select("*, creator:profiles!albums_created_by_fkey(display_name, username)")
             .eq("conversation_id", value: conversationId.uuidString)
             .order("created_at", ascending: false)
             .execute()

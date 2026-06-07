@@ -40,13 +40,13 @@ struct AlbumListView: View {
                             }
                             .buttonStyle(.plain)
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if album.createdBy == currentUserId {
-                                    Button(role: .destructive) {
-                                        albumToDelete = album
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
+                                let isCreator = album.createdBy == currentUserId
+                                Button(role: isCreator ? .destructive : .none) {
+                                    if isCreator { albumToDelete = album }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
                                 }
+                                .tint(isCreator ? .red : Color(UIColor.systemGray4))
                             }
                         }
                     }
@@ -143,9 +143,14 @@ private struct AlbumRowView: View {
                 Text(album.name)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.yaplyPrimary)
-                Text(album.createdAt.formatted(.dateTime.month(.abbreviated).day().year()))
-                    .font(.caption)
-                    .foregroundStyle(Color.yaplySecondary)
+                HStack(spacing: 4) {
+                    Text("by \(album.creator?.name ?? "Unknown")")
+                    Text("·")
+                        .foregroundStyle(Color.yaplySecondary.opacity(0.4))
+                    Text(album.createdAt.formatted(.dateTime.month(.abbreviated).day().year()))
+                }
+                .font(.caption)
+                .foregroundStyle(Color.yaplySecondary)
             }
             Spacer()
             Image(systemName: "chevron.right")
@@ -203,9 +208,17 @@ private struct AlbumGallerySheet: View {
                     }
                 }
             }
-            .navigationTitle(album.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 1) {
+                        Text(album.name)
+                            .font(.headline)
+                        Text("by \(album.creator?.name ?? "Unknown")")
+                            .font(.caption2)
+                            .foregroundStyle(Color.yaplySecondary)
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                         .foregroundStyle(Color.yaplyAccent)

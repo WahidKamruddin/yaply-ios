@@ -91,6 +91,14 @@ struct AvailabilityCalendarView: View {
 
     private let dayAbbr = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
 
+    private var confirmSlotMessage: String {
+        guard let slot = confirmSlot else { return "" }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let d = f.date(from: slot) else { return slot }
+        return d.formatted(.dateTime.weekday(.wide).month(.wide).day().hour().minute())
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -124,13 +132,7 @@ struct AvailabilityCalendarView: View {
             }
             Button("Cancel", role: .cancel) { confirmSlot = nil }
         } message: {
-            if let slot = confirmSlot {
-                let f = ISO8601DateFormatter()
-                f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                if let d = f.date(from: slot) {
-                    Text(d.formatted(.dateTime.weekday(.wide).month(.wide).day().hour().minute()))
-                }
-            }
+            Text(confirmSlotMessage)
         }
     }
 

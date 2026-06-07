@@ -12,9 +12,10 @@ struct YaplyNote: Codable, Identifiable {
     var content: String
     let createdAt: Date
     var updatedAt: Date
+    var creator: CreatorProfile?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, content
+        case id, title, content, creator
         case conversationId = "conversation_id"
         case userId         = "user_id"
         case createdAt      = "created_at"
@@ -26,7 +27,7 @@ final class NoteRepository {
     func fetchNotes(conversationId: UUID) async throws -> [YaplyNote] {
         return try await supabase
             .from("notes")
-            .select()
+            .select("*, creator:profiles!notes_user_id_fkey(display_name, username)")
             .eq("conversation_id", value: conversationId.uuidString)
             .order("updated_at", ascending: false)
             .execute()

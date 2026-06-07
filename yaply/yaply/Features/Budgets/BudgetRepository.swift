@@ -10,9 +10,10 @@ struct YaplyBudget: Codable, Identifiable {
     var currency: String
     let createdBy: UUID
     let createdAt: Date
+    var creator: CreatorProfile?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, currency
+        case id, name, currency, creator
         case conversationId = "conversation_id"
         case totalAmount    = "total_amount"
         case createdBy      = "created_by"
@@ -41,7 +42,7 @@ final class BudgetRepository {
     func fetchBudgets(conversationId: UUID) async throws -> [YaplyBudget] {
         return try await supabase
             .from("budgets")
-            .select()
+            .select("*, creator:profiles!budgets_created_by_fkey(display_name, username)")
             .eq("conversation_id", value: conversationId.uuidString)
             .order("created_at", ascending: false)
             .execute()

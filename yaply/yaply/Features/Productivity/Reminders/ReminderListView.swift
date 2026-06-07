@@ -36,13 +36,14 @@ struct ReminderListView: View {
                     List {
                         ForEach(reminders) { reminder in
                             ReminderRowView(reminder: reminder)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    Button(role: .destructive) {
-                                        reminderToDismiss = reminder
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    let isCreator = reminder.userId == currentUserId
+                                    Button(role: isCreator ? .destructive : .none) {
+                                        if isCreator { reminderToDismiss = reminder }
                                     } label: {
                                         Label("Dismiss", systemImage: "bell.slash")
                                     }
-                                    .tint(Color.orange)
+                                    .tint(isCreator ? Color.orange : Color(UIColor.systemGray4))
                                 }
                                 .listRowBackground(Color.white)
                         }
@@ -102,9 +103,15 @@ private struct ReminderRowView: View {
                 Text(reminder.message)
                     .font(.system(size: 15))
                     .foregroundStyle(Color.yaplyPrimary)
-                Text(reminder.remindAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
-                    .font(.caption)
-                    .foregroundStyle(isPast ? Color.orange : Color.yaplySecondary)
+                HStack(spacing: 4) {
+                    Text(reminder.remindAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
+                        .foregroundStyle(isPast ? Color.orange : Color.yaplySecondary)
+                    Text("·")
+                        .foregroundStyle(Color.yaplySecondary.opacity(0.4))
+                    Text("set by \(reminder.creator?.name ?? "Unknown")")
+                        .foregroundStyle(Color.yaplySecondary)
+                }
+                .font(.caption)
             }
             Spacer()
         }
