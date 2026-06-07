@@ -20,120 +20,161 @@ struct EventDetailSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Header card
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            statusBadge
-                            Spacer()
-                        }
-                        Text(event.name)
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(Color.yaplyPrimary)
+            if event.isPlanning {
+                planningView
+            } else {
+                confirmedView
+            }
+        }
+    }
 
-                        if let desc = event.description, !desc.isEmpty {
-                            Text(desc)
-                                .font(.system(size: 14))
-                                .foregroundStyle(Color.yaplySecondary)
-                        }
+    // MARK: - Planning mode: compact header + full availability calendar
 
-                        if event.isConfirmed, let starts = event.startsAt {
-                            Label(
-                                starts.formatted(.dateTime.weekday(.wide).month(.wide).day().hour().minute()),
-                                systemImage: "calendar"
-                            )
+    private var planningView: some View {
+        VStack(spacing: 0) {
+            // Compact header
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    statusBadge
+                    Text(event.name)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.yaplyPrimary)
+                        .lineLimit(1)
+                }
+                if let desc = event.description, !desc.isEmpty {
+                    Text(desc)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.yaplySecondary)
+                        .lineLimit(2)
+                }
+                if let loc = event.location, !loc.isEmpty {
+                    Label(loc, systemImage: "mappin")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.yaplySecondary)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white)
+            .overlay(alignment: .bottom) { Divider() }
+
+            // Availability calendar fills remaining space
+            AvailabilityCalendarView(event: event, currentUserId: currentUserId)
+        }
+        .navigationTitle("Plan")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { dismiss() }
+                    .foregroundStyle(Color.yaplyAccent)
+            }
+        }
+    }
+
+    // MARK: - Confirmed mode: RSVP + details
+
+    private var confirmedView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Header card
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        statusBadge
+                        Spacer()
+                    }
+                    Text(event.name)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.yaplyPrimary)
+
+                    if let desc = event.description, !desc.isEmpty {
+                        Text(desc)
                             .font(.system(size: 14))
                             .foregroundStyle(Color.yaplySecondary)
-                        }
+                    }
 
-                        if let loc = event.location, !loc.isEmpty {
-                            Label(loc, systemImage: "mappin")
-                                .font(.system(size: 14))
+                    if let starts = event.startsAt {
+                        Label(
+                            starts.formatted(.dateTime.weekday(.wide).month(.wide).day().hour().minute()),
+                            systemImage: "calendar"
+                        )
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.yaplySecondary)
+                    }
+
+                    if let loc = event.location, !loc.isEmpty {
+                        Label(loc, systemImage: "mappin")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Color.yaplySecondary)
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+
+                // RSVP section
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("RSVP")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.yaplyPrimary)
+                        Spacer()
+                        if !rsvps.isEmpty {
+                            Text(tallyText)
+                                .font(.system(size: 12))
                                 .foregroundStyle(Color.yaplySecondary)
                         }
                     }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
 
-                    // RSVP section
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text("RSVP")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(Color.yaplyPrimary)
-                            Spacer()
-                            if !rsvps.isEmpty {
-                                Text(tallyText)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(Color.yaplySecondary)
-                            }
+                    if isLoading {
+                        ProgressView().tint(Color.yaplyAccent)
+                    } else {
+                        HStack(spacing: 10) {
+                            RsvpButton(label: "Going",     value: "going",     current: myResponse, isSaving: isSaving) { await tap("going") }
+                            RsvpButton(label: "Maybe",     value: "maybe",     current: myResponse, isSaving: isSaving) { await tap("maybe") }
+                            RsvpButton(label: "Can't Go",  value: "not_going", current: myResponse, isSaving: isSaving) { await tap("not_going") }
                         }
 
-                        if isLoading {
-                            ProgressView().tint(Color.yaplyAccent)
-                        } else {
-                            HStack(spacing: 10) {
-                                RsvpButton(label: "Going",    value: "going",     current: myResponse, isSaving: isSaving) { await tap("going") }
-                                RsvpButton(label: "Maybe",   value: "maybe",     current: myResponse, isSaving: isSaving) { await tap("maybe") }
-                                RsvpButton(label: "Can't Go", value: "not_going", current: myResponse, isSaving: isSaving) { await tap("not_going") }
-                            }
-
-                            if !rsvps.isEmpty {
-                                Divider()
-                                ForEach(rsvps) { rsvp in
-                                    HStack(spacing: 10) {
-                                        Circle()
-                                            .fill(responseColor(rsvp.response).opacity(0.15))
-                                            .frame(width: 32, height: 32)
-                                            .overlay(
-                                                Text(responseIcon(rsvp.response))
-                                                    .font(.system(size: 13))
-                                            )
-                                        Text(displayName(rsvp))
-                                            .font(.system(size: 14))
-                                            .foregroundStyle(Color.yaplyPrimary)
-                                        Spacer()
-                                        Text(responseLabel(rsvp.response))
-                                            .font(.system(size: 12, weight: .medium))
-                                            .foregroundStyle(responseColor(rsvp.response))
-                                    }
+                        if !rsvps.isEmpty {
+                            Divider()
+                            ForEach(rsvps) { rsvp in
+                                HStack(spacing: 10) {
+                                    Circle()
+                                        .fill(responseColor(rsvp.response).opacity(0.15))
+                                        .frame(width: 32, height: 32)
+                                        .overlay(
+                                            Text(responseIcon(rsvp.response))
+                                                .font(.system(size: 13))
+                                        )
+                                    Text(displayName(rsvp))
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(Color.yaplyPrimary)
+                                    Spacer()
+                                    Text(responseLabel(rsvp.response))
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(responseColor(rsvp.response))
                                 }
                             }
                         }
                     }
-                    .padding(16)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-
-                    if event.isPlanning {
-                        HStack(spacing: 8) {
-                            Image(systemName: "calendar.badge.clock")
-                                .foregroundStyle(Color.yaplyAccent)
-                            Text("Set your availability on the web app to find the best time.")
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color.yaplySecondary)
-                        }
-                        .padding(14)
-                        .background(Color(red: 0.953, green: 0.969, blue: 1.0))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                    }
                 }
                 .padding(16)
+                .background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
             }
-            .background(Color.yaplyBackground)
-            .navigationTitle(event.isPlanning ? "Plan" : "Event")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .foregroundStyle(Color.yaplyAccent)
-                }
-            }
-            .task { await loadRsvps() }
+            .padding(16)
         }
+        .background(Color.yaplyBackground)
+        .navigationTitle("Event")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { dismiss() }
+                    .foregroundStyle(Color.yaplyAccent)
+            }
+        }
+        .task { await loadRsvps() }
     }
 
     // MARK: - Helpers
