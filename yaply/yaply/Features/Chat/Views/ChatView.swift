@@ -361,10 +361,10 @@ struct ChatView: View {
         switch cmd.name {
         case "remind":
             do {
-                try await RemindHandler.execute(args: cmd.args, conversationId: conversationId, userId: currentUserId)
-                showCommandFeedback("⏰ Reminder set")
+                let msg = try await RemindHandler.execute(args: cmd.args, conversationId: conversationId, userId: currentUserId)
+                showCommandFeedback(msg)
             } catch {
-                showCommandFeedback("Failed: \(error.localizedDescription)")
+                showCommandFeedback(error.localizedDescription)
             }
         case "mute":
             do {
