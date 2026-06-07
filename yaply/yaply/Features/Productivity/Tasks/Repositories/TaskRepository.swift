@@ -4,6 +4,19 @@ import Foundation
 import Supabase
 import PostgREST
 
+// Shared creator profile struct — used by Task, Note, Event, Album, Budget, Reminder models
+struct CreatorProfile: Codable {
+    let displayName: String?
+    let username: String?
+
+    var name: String { displayName ?? username ?? "Unknown" }
+
+    enum CodingKeys: String, CodingKey {
+        case displayName = "display_name"
+        case username
+    }
+}
+
 // Mirrors src/features/commands/handlers/createHandler.ts task creation
 struct YaplyTask: Codable, Identifiable {
     let id: UUID
@@ -18,9 +31,10 @@ struct YaplyTask: Codable, Identifiable {
     var completedAt: Date?
     let createdAt: Date
     var updatedAt: Date
+    var creator: CreatorProfile?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, description, status, priority
+        case id, title, description, status, priority, creator
         case conversationId = "conversation_id"
         case createdBy      = "created_by"
         case assignedTo     = "assigned_to"
@@ -35,7 +49,7 @@ final class TaskRepository {
     func fetchTasks(conversationId: UUID) async throws -> [YaplyTask] {
         return try await supabase
             .from("tasks")
-            .select()
+            .select("*, creator:profiles!tasks_created_by_fkey(display_name, username)")
             .eq("conversation_id", value: conversationId.uuidString)
             .order("created_at", ascending: false)
             .execute()

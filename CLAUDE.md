@@ -129,8 +129,11 @@ yaply/yaply/
     │                        ConversationRowView, GroupInfoView, NewConversationView,
     │                        ThreadView, ConversationDetailView)
     ├── Events/
-    │   ├── Repositories/EventRepository.swift   ← YaplyEvent, CRUD + delete
-    │   └── Views/EventListView.swift             ← grouped list, create sheet, delete confirm
+    │   ├── Repositories/EventRepository.swift   ← YaplyEvent, YaplyEventAvailability, AvailMember, YaplyEventRsvp; CRUD + availability + RSVP
+    │   └── Views/
+    │       ├── EventListView.swift              ← grouped list (Confirmed / Planning), create sheet, delete confirm
+    │       ├── EventDetailSheet.swift           ← planning mode (header + AvailabilityCalendarView) vs confirmed mode (header + RSVP)
+    │       └── AvailabilityCalendarView.swift   ← when2meet grid: heatmap, tap-toggle, member chips, creator long-press confirm
     ├── Albums/
     │   ├── AlbumRepository.swift                ← YaplyAlbum, YaplyAlbumMedia, CRUD
     │   └── AlbumListView.swift                  ← list + gallery sheet (3-col grid)
@@ -187,6 +190,7 @@ GIPHY_API_KEY = your-giphy-key
 - **System message expiry:** System messages have `deleted_at` set to `now + 7 days` at insert. `MessageBubbleView` checks `deletedAt <= Date()` and returns `EmptyView` if expired — never shows "Message deleted" for expired system messages.
 - **SourceKit cross-file diagnostics:** The Xcode project compiles fine; SourceKit shows spurious "Cannot find type" errors in new files because it doesn't index across all targets during standalone file edits. Always verify in Xcode, not the SourceKit error panel.
 - **`ConversationDetailView`** is the iOS equivalent of the web's `ConversationPanel` sidebar. Opened from the toolbar `list.bullet.rectangle.portrait` button in `ChatView`, or by tapping an "Open →" link in a system message.
+- **Sidebar refetch after slash command creation:** When any item is created via a slash command (`/task`, `/note`, `/remind`, `/album`, `/budget`, `/event`, `/plan`), `ChatView` posts `NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "<type>"])` after the insert succeeds. Each list view listens with `.onReceive(NotificationCenter.default.publisher(for: .yaplyItemCreated))` and calls its `load()` function when the type string matches. `Notification.Name.yaplyItemCreated` is defined in `Core/Extensions/String+Utils.swift`.
 
 ---
 
@@ -277,7 +281,21 @@ The `systemMessageTabMap` array maps content patterns (case-insensitive) to tab 
 
 `EventListView` shows two sections — "Confirmed" (status='confirmed') and "Planning" (status='planning'). Swipe-to-delete only shows for `event.createdBy == currentUserId`. Create sheet has a segmented picker for Planning vs Event type; confirmed events require a `DatePicker` for `starts_at`.
 
-**Availability calendar (future):** The `event_availability` and `event_rsvp` tables exist in the DB. A full when2meet-style calendar view is not yet implemented in iOS.
+**Availability calendar:** Fully implemented as `AvailabilityCalendarView` in `Features/Events/Views/`. `EventDetailSheet` drives the split:
+
+- **Planning mode** (`status='planning'`): compact header (badge + name + description + location) → `AvailabilityCalendarView` fills the remaining sheet space. No RSVP section.
+- **Confirmed mode** (`status='confirmed'`): full header card → RSVP buttons (Going / Maybe / Can't Go) + member tally + response list.
+
+**`AvailabilityCalendarView` key details:**
+- Week navigator at top, advances/retreats 7 days at a time (Sunday-anchored `startOfWeek`)
+- 7-column × 28-row grid (8am–10pm, 30-min slots)
+- Slot keys are ISO8601 UTC strings matching the web format (e.g. `"2025-06-10T13:00:00.000Z"`) — built with `Calendar.current` local-time dates then formatted via `ISO8601DateFormatter` with `.timeZone = UTC` and `.withFractionalSeconds`
+- Heatmap: transparent (0 others), light blue (≤33%), mid blue (≤66%), accent blue (>66%) — your own slots render dark navy
+- Tap to toggle your slot; long-press (0.45s) on a cell where `isCreator && count > 0 && !isMine` fires the confirm-time alert
+- "Save" button upserts `event_availability` with `onConflict: "event_id,user_id"`
+- Creator confirm: parses slot key back to `Date`, adds 1h for `ends_at`, calls `repo.confirmEvent`, posts `.yaplyItemCreated` notification, dismisses the sheet
+- Member chips: horizontal scroll showing initials avatar + name ("You" for current user) + slot count
+- `EventRepository` gained: `fetchAvailability(eventId:)`, `setAvailability(eventId:userId:slots:)`, `fetchEventMembers(conversationId:)`
 
 ---
 

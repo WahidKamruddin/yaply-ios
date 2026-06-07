@@ -46,11 +46,13 @@ struct NoteListView: View {
                             )
                             .listRowBackground(Color.white)
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button(role: .destructive) {
-                                    noteToDelete = note
+                                let isCreator = note.userId == currentUserId
+                                Button(role: isCreator ? .destructive : .none) {
+                                    if isCreator { noteToDelete = note }
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
+                                .tint(isCreator ? .red : Color(UIColor.systemGray4))
                             }
                         }
                     }
@@ -140,6 +142,9 @@ private struct NoteRowView: View {
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(Color.yaplyPrimary)
                     Spacer()
+                    Text("by \(note.creator?.name ?? "Unknown")")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.yaplySecondary.opacity(0.7))
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.yaplySecondary)

@@ -40,6 +40,10 @@ struct EventDetailSheet: View {
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(Color.yaplyPrimary)
                         .lineLimit(1)
+                    Spacer()
+                    Text("by \(event.creator?.name ?? "Unknown")")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.yaplySecondary.opacity(0.7))
                 }
                 if let desc = event.description, !desc.isEmpty {
                     Text(desc)
@@ -82,6 +86,9 @@ struct EventDetailSheet: View {
                     HStack(spacing: 8) {
                         statusBadge
                         Spacer()
+                        Text("by \(event.creator?.name ?? "Unknown")")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.yaplySecondary.opacity(0.7))
                     }
                     Text(event.name)
                         .font(.system(size: 20, weight: .semibold))

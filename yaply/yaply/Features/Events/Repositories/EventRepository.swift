@@ -74,9 +74,10 @@ struct YaplyEvent: Codable, Identifiable {
     var endsAt: Date?
     let createdAt: Date
     var updatedAt: Date
+    var creator: CreatorProfile?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, description, location, status
+        case id, name, description, location, status, creator
         case conversationId = "conversation_id"
         case createdBy      = "created_by"
         case startsAt       = "starts_at"
@@ -93,7 +94,7 @@ final class EventRepository {
     func fetchEvents(conversationId: UUID) async throws -> [YaplyEvent] {
         return try await supabase
             .from("events")
-            .select()
+            .select("*, creator:profiles!events_created_by_fkey(display_name, username)")
             .eq("conversation_id", value: conversationId.uuidString)
             .order("created_at", ascending: false)
             .execute()

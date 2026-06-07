@@ -38,13 +38,13 @@ struct BudgetListView: View {
                         ForEach(budgets) { budget in
                             BudgetRowView(budget: budget)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    if budget.createdBy == currentUserId {
-                                        Button(role: .destructive) {
-                                            budgetToDelete = budget
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
-                                        }
+                                    let isCreator = budget.createdBy == currentUserId
+                                    Button(role: isCreator ? .destructive : .none) {
+                                        if isCreator { budgetToDelete = budget }
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
                                     }
+                                    .tint(isCreator ? .red : Color(UIColor.systemGray4))
                                 }
                         }
                     }
@@ -149,9 +149,14 @@ private struct BudgetRowView: View {
                 Text(budget.name)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.yaplyPrimary)
-                Text("\(budget.currency) \(String(format: "%.2f", budget.totalAmount))")
-                    .font(.caption)
-                    .foregroundStyle(Color.yaplySecondary)
+                HStack(spacing: 4) {
+                    Text("by \(budget.creator?.name ?? "Unknown")")
+                    Text("·")
+                        .foregroundStyle(Color.yaplySecondary.opacity(0.4))
+                    Text("\(budget.currency) \(String(format: "%.2f", budget.totalAmount))")
+                }
+                .font(.caption)
+                .foregroundStyle(Color.yaplySecondary)
             }
         }
         .padding(.vertical, 2)

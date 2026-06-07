@@ -39,11 +39,13 @@ struct TaskListView: View {
                             }
                             .listRowBackground(Color.white)
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button(role: .destructive) {
-                                    taskToDelete = task
+                                let isCreator = task.createdBy == currentUserId
+                                Button(role: isCreator ? .destructive : .none) {
+                                    if isCreator { taskToDelete = task }
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
+                                .tint(isCreator ? .red : Color(UIColor.systemGray4))
                             }
                         }
                     }
@@ -141,9 +143,15 @@ private struct TaskRowView: View {
                     .font(.system(size: 15))
                     .strikethrough(task.status == "done")
                     .foregroundStyle(task.status == "done" ? Color.yaplySecondary : Color.yaplyPrimary)
-                Text(task.priority.capitalized + " priority")
-                    .font(.caption)
-                    .foregroundStyle(priorityColor)
+                HStack(spacing: 4) {
+                    Text(task.priority.capitalized + " priority")
+                        .foregroundStyle(priorityColor)
+                    Text("·")
+                        .foregroundStyle(Color.yaplySecondary.opacity(0.5))
+                    Text("by \(task.creator?.name ?? "Unknown")")
+                        .foregroundStyle(Color.yaplySecondary)
+                }
+                .font(.caption)
             }
         }
         .padding(.vertical, 4)

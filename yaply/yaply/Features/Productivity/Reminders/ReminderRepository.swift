@@ -13,9 +13,10 @@ struct YaplyReminder: Codable, Identifiable {
     let remindAt: Date
     var status: String    // "pending" | "sent" | "dismissed"
     let createdAt: Date
+    var creator: CreatorProfile?
 
     enum CodingKeys: String, CodingKey {
-        case id, message, status
+        case id, message, status, creator
         case userId         = "user_id"
         case conversationId = "conversation_id"
         case remindAt       = "remind_at"
@@ -27,7 +28,7 @@ final class ReminderRepository {
     func fetchReminders(conversationId: UUID) async throws -> [YaplyReminder] {
         return try await supabase
             .from("reminders")
-            .select()
+            .select("*, creator:profiles!reminders_user_id_fkey(display_name, username)")
             .eq("conversation_id", value: conversationId.uuidString)
             .neq("status", value: "dismissed")
             .order("remind_at", ascending: true)
