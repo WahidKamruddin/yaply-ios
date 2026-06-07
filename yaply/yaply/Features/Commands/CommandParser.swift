@@ -46,7 +46,7 @@ enum YaplyCommand: String, CaseIterable {
     // Arg hint shown in the input field after command name + space
     var argHint: String? {
         switch self {
-        case .remind: return "[time] [message]  e.g. 30m Groceries"
+        case .remind: return "[date] [time] [message]  e.g. today 3:00pm Call Alice"
         case .mute:   return "[1h · 8h · 24h · forever]"
         case .task:   return "[title]"
         case .note:   return "[title]"
