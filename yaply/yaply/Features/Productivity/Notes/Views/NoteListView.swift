@@ -69,6 +69,10 @@ struct NoteListView: View {
             }
         }
         .task { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .yaplyItemCreated)) { notif in
+            guard (notif.userInfo?["type"] as? String) == "notes" else { return }
+            Task { await load() }
+        }
         .sheet(isPresented: $showAdd) {
             addNoteSheet
         }

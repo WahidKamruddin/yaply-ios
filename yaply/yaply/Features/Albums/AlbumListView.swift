@@ -65,6 +65,10 @@ struct AlbumListView: View {
             }
         }
         .task { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .yaplyItemCreated)) { notif in
+            guard (notif.userInfo?["type"] as? String) == "albums" else { return }
+            Task { await load() }
+        }
         .sheet(isPresented: $showCreate) {
             createSheet
         }

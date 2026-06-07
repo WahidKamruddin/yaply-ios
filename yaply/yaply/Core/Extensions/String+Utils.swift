@@ -1,5 +1,9 @@
 import Foundation
 
+extension Notification.Name {
+    static let yaplyItemCreated = Notification.Name("yaply.itemCreated")
+}
+
 extension String {
     var isBlank: Bool { trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 

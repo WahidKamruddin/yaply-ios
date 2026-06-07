@@ -62,6 +62,10 @@ struct TaskListView: View {
             }
         }
         .task { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .yaplyItemCreated)) { notif in
+            guard (notif.userInfo?["type"] as? String) == "tasks" else { return }
+            Task { await load() }
+        }
         .sheet(isPresented: $showAdd) {
             addTaskSheet
         }
