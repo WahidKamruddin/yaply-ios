@@ -8,6 +8,7 @@ struct EventListView: View {
     @State private var isLoading = false
     @State private var showCreate = false
     @State private var eventToDelete: YaplyEvent?
+    @State private var selectedEvent: YaplyEvent?
     @State private var createStatus: String = "planning"
     @State private var newName = ""
     @State private var newLocation = ""
@@ -35,32 +36,38 @@ struct EventListView: View {
                         if !confirmed.isEmpty {
                             Section("Confirmed") {
                                 ForEach(confirmed) { event in
-                                    EventRowView(event: event)
-                                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                            if event.createdBy == currentUserId {
-                                                Button(role: .destructive) {
-                                                    eventToDelete = event
-                                                } label: {
-                                                    Label("Delete", systemImage: "trash")
-                                                }
+                                    Button(action: { selectedEvent = event }) {
+                                        EventRowView(event: event)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                        if event.createdBy == currentUserId {
+                                            Button(role: .destructive) {
+                                                eventToDelete = event
+                                            } label: {
+                                                Label("Delete", systemImage: "trash")
                                             }
                                         }
+                                    }
                                 }
                             }
                         }
                         if !planning.isEmpty {
                             Section("Planning") {
                                 ForEach(planning) { event in
-                                    EventRowView(event: event)
-                                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                            if event.createdBy == currentUserId {
-                                                Button(role: .destructive) {
-                                                    eventToDelete = event
-                                                } label: {
-                                                    Label("Delete", systemImage: "trash")
-                                                }
+                                    Button(action: { selectedEvent = event }) {
+                                        EventRowView(event: event)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                        if event.createdBy == currentUserId {
+                                            Button(role: .destructive) {
+                                                eventToDelete = event
+                                            } label: {
+                                                Label("Delete", systemImage: "trash")
                                             }
                                         }
+                                    }
                                 }
                             }
                         }
@@ -80,6 +87,9 @@ struct EventListView: View {
             }
         }
         .task { await load() }
+        .sheet(item: $selectedEvent) { event in
+            EventDetailSheet(event: event, currentUserId: currentUserId)
+        }
         .sheet(isPresented: $showCreate) {
             createSheet
         }

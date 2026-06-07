@@ -2,6 +2,38 @@ import Foundation
 import Supabase
 import PostgREST
 
+// MARK: - Models
+
+struct YaplyEventRsvp: Codable, Identifiable {
+    let id: UUID
+    let eventId: UUID
+    let userId: UUID
+    var response: String   // "going" | "maybe" | "not_going" | "pending"
+    var updatedAt: Date
+    var profile: RsvpProfile?
+
+    struct RsvpProfile: Codable {
+        let id: UUID
+        let username: String?
+        let displayName: String?
+        let avatarUrl: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id, username
+            case displayName = "display_name"
+            case avatarUrl   = "avatar_url"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, response
+        case eventId   = "event_id"
+        case userId    = "user_id"
+        case updatedAt = "updated_at"
+        case profile   = "profiles"
+    }
+}
+
 // Events schema: events(id, conversation_id, created_by, name, description, location, status, starts_at, ends_at, created_at, updated_at)
 // status: 'planning' (when2meet mode) | 'confirmed' (date locked)
 struct YaplyEvent: Codable, Identifiable {
@@ -99,6 +131,38 @@ final class EventRepository {
             .from("events")
             .update(Update(status: "confirmed", starts_at: startsAt.iso8601, ends_at: endsAt?.iso8601, updated_at: Date().iso8601))
             .eq("id", value: id.uuidString)
+            .execute()
+    }
+
+    // MARK: - RSVP
+
+    func fetchRsvps(eventId: UUID) async throws -> [YaplyEventRsvp] {
+        return try await supabase
+            .from("event_rsvp")
+            .select("*, profiles!user_id(id, username, display_name, avatar_url)")
+            .eq("event_id", value: eventId.uuidString)
+            .execute()
+            .value
+    }
+
+    func setRsvp(eventId: UUID, userId: UUID, response: String) async throws {
+        struct Upsert: Encodable {
+            let event_id: String
+            let user_id: String
+            let response: String
+            let updated_at: String
+        }
+        try await supabase
+            .from("event_rsvp")
+            .upsert(
+                Upsert(
+                    event_id: eventId.uuidString,
+                    user_id: userId.uuidString,
+                    response: response,
+                    updated_at: Date().iso8601
+                ),
+                onConflict: "event_id,user_id"
+            )
             .execute()
     }
 }
