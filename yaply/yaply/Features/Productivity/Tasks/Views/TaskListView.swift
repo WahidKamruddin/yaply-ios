@@ -8,6 +8,7 @@ struct TaskListView: View {
     @State private var isLoading = false
     @State private var newTaskTitle = ""
     @State private var showAdd = false
+    @State private var taskToDelete: YaplyTask?
 
     private let repo = TaskRepository()
 
@@ -37,6 +38,13 @@ struct TaskListView: View {
                                 Task { try? await repo.updateStatus(taskId: task.id, status: newStatus) }
                             }
                             .listRowBackground(Color.white)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    taskToDelete = task
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                         }
                     }
                     .listStyle(.plain)
@@ -56,6 +64,22 @@ struct TaskListView: View {
         .task { await load() }
         .sheet(isPresented: $showAdd) {
             addTaskSheet
+        }
+        .alert("Delete Task", isPresented: Binding(
+            get: { taskToDelete != nil },
+            set: { if !$0 { taskToDelete = nil } }
+        )) {
+            Button("Delete", role: .destructive) {
+                guard let t = taskToDelete else { return }
+                taskToDelete = nil
+                Task {
+                    try? await repo.deleteTask(id: t.id)
+                    tasks.removeAll { $0.id == t.id }
+                }
+            }
+            Button("Cancel", role: .cancel) { taskToDelete = nil }
+        } message: {
+            Text("\"\(taskToDelete?.title ?? "")\" will be permanently deleted.")
         }
     }
 

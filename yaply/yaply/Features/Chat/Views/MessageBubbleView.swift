@@ -2,6 +2,21 @@ import SwiftUI
 
 private let quickEmojis = ["👍", "❤️", "😂", "😮", "😢", "🎉"]
 
+// Tab names that match ConversationDetailView tab IDs
+private let systemMessageTabMap: [(pattern: String, tab: String)] = [
+    ("Plan created",  "events"),
+    ("Event created", "events"),
+    ("Album created", "albums"),
+    ("Task created",  "tasks"),
+    ("Note created",  "notes"),
+    ("Budget created","budgets"),
+    ("Reminder set",  "reminders"),
+]
+
+private func systemMessageTab(for content: String) -> String? {
+    systemMessageTabMap.first { content.localizedCaseInsensitiveContains($0.pattern) }?.tab
+}
+
 struct MessageBubbleView: View {
     let message: DecryptedMessage
     let isOwn: Bool
@@ -15,6 +30,7 @@ struct MessageBubbleView: View {
     var onOpenThread: ((DecryptedMessage) -> Void)?
     var onReplyInThread: ((DecryptedMessage) -> Void)?
     var onQuotationClick: ((UUID) -> Void)?
+    var onOpenDetail: ((String) -> Void)?
 
     var swipeOffset: CGFloat = 0
 
@@ -23,17 +39,54 @@ struct MessageBubbleView: View {
     @State private var hasTriggeredReply = false
 
     var body: some View {
-        ZStack(alignment: .trailing) {
-            if isOwn {
-                Text(message.createdAt.timeOnly)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.yaplySecondary)
-                    .padding(.trailing, 16)
-                    .opacity(Double(min(1, abs(swipeOffset) / 50)))
-            }
+        Group {
+            if message.type == "system" {
+                systemMessageView
+            } else {
+                ZStack(alignment: .trailing) {
+                    Text(message.createdAt.timeOnly)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.yaplySecondary)
+                        .padding(.trailing, 16)
+                        .opacity(Double(min(1, abs(swipeOffset) / 50)))
 
-            mainRow
-                .offset(x: isOwn ? swipeOffset : 0)
+                    mainRow
+                        .offset(x: swipeOffset)
+                }
+            }
+        }
+    }
+
+    // System messages: centered pill. Expired ones (deletedAt in the past) are hidden.
+    @ViewBuilder
+    private var systemMessageView: some View {
+        if let expiry = message.deletedAt, expiry <= Date() {
+            EmptyView()
+        } else {
+            let tab = systemMessageTab(for: message.content)
+            HStack(spacing: 4) {
+                Text(message.content)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.yaplySecondary)
+                if let tab, let onOpenDetail {
+                    Button {
+                        onOpenDetail(tab)
+                    } label: {
+                        Text("Open →")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color.yaplyAccent)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.white)
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(Color.yaplyBorder, lineWidth: 0.5))
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
         }
     }
 

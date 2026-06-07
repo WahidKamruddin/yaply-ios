@@ -19,8 +19,9 @@ struct MessageInputView: View {
                 ReplyStripView(message: reply, onDismiss: onCancelReply)
             }
 
+            // Command palette: shown while typing the command name (before a space)
             if showCommandPalette {
-                CommandPaletteView(query: commandQuery, onSelect: { cmd in
+                CommandPaletteView(query: paletteQuery, onSelect: { cmd in
                     text = "/\(cmd) "
                     showCommandPalette = false
                     isFocused = true
@@ -29,7 +30,6 @@ struct MessageInputView: View {
             }
 
             HStack(alignment: .bottom, spacing: 10) {
-                // Attachment button
                 Button(action: onAttachment) {
                     Image(systemName: "paperclip")
                         .font(.system(size: 20))
@@ -37,7 +37,6 @@ struct MessageInputView: View {
                 }
                 .disabled(disabled)
 
-                // Text input
                 HStack(alignment: .bottom) {
                     TextField("Message...", text: $text, axis: .vertical)
                         .lineLimit(1...6)
@@ -49,13 +48,13 @@ struct MessageInputView: View {
                             onSend()
                         }
                         .onChange(of: text) { _, new in
+                            let isPaletteActive = new.hasPrefix("/") && !new.contains(" ")
                             withAnimation(.easeOut(duration: 0.15)) {
-                                showCommandPalette = new.hasPrefix("/") && !new.contains(" ")
+                                showCommandPalette = isPaletteActive
                             }
                             if !new.isEmpty { onTyping?() } else { onStopTyping?() }
                         }
 
-                    // GIF button
                     Button(action: onAttachment) {
                         Text("GIF")
                             .font(.system(size: 11, weight: .bold))
@@ -72,7 +71,6 @@ struct MessageInputView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.yaplyBorder))
 
-                // Send button
                 Button(action: {
                     guard !text.isBlank else { return }
                     onSend()
@@ -94,8 +92,10 @@ struct MessageInputView: View {
         }
     }
 
-    private var commandQuery: String {
+    // Query for palette filtering (text after "/" before any space)
+    private var paletteQuery: String {
         guard text.hasPrefix("/") else { return "" }
         return String(text.dropFirst())
     }
+
 }

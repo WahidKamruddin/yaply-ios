@@ -17,6 +17,11 @@ struct ChatView: View {
     @State private var searchQuery = ""
     @State private var showGroupInfo = false
     @State private var swipeOffset: CGFloat = 0
+    @State private var showDetail = false
+    @State private var detailTab: String = "tasks"
+    @State private var commandFeedback: String?
+    @State private var feedbackDismissTask: Task<Void, Never>?
+    @State private var showHelp = false
     @Environment(AppRouter.self) private var router
 
     private let convRepository = ConversationRepository()
@@ -105,6 +110,10 @@ struct ChatView: View {
                                         onOpenThread: { threadRoot = $0 },
                                         onReplyInThread: { threadRoot = $0 },
                                         onQuotationClick: { id in scrollToId = id },
+                                        onOpenDetail: { tab in
+                                            detailTab = tab
+                                            showDetail = true
+                                        },
                                         swipeOffset: swipeOffset
                                     )
                                     .id(msg.id)
@@ -168,14 +177,45 @@ struct ChatView: View {
                     }
                 }
 
+                // Command feedback banner
+                if let feedback = commandFeedback {
+                    HStack(spacing: 8) {
+                        Image(systemName: "terminal")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.yaplySecondary)
+                        Text(feedback)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color.yaplySecondary)
+                        Spacer()
+                        Button { commandFeedback = nil } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.yaplySecondary.opacity(0.6))
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(red: 0.953, green: 0.969, blue: 1.0))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yaplyBorder.opacity(0.8)))
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 4)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
                 MessageInputView(
                     text: $messageText,
                     replyTo: vm.replyToMessage,
                     onSend: {
-                        let text = messageText
+                        let rawText = messageText.trimmingCharacters(in: .whitespaces)
+                        guard !rawText.isBlank else { return }
                         messageText = ""
                         vm.notifyStopTyping()
-                        Task { await vm.sendMessage(text: text) }
+                        if let cmd = ParsedCommand.parse(rawText) {
+                            Task { await handleCommand(cmd) }
+                        } else {
+                            Task { await vm.sendMessage(text: rawText) }
+                        }
                     },
                     onAttachment: { showMedia = true },
                     onCancelReply: { vm.replyToMessage = nil },
@@ -207,6 +247,14 @@ struct ChatView: View {
                         if !searchIsActive { searchQuery = "" }
                     } label: {
                         Image(systemName: searchIsActive ? "xmark" : "magnifyingglass")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Color.yaplyAccent)
+                    }
+                    Button {
+                        detailTab = "tasks"
+                        showDetail = true
+                    } label: {
+                        Image(systemName: "list.bullet.rectangle.portrait")
                             .font(.system(size: 16))
                             .foregroundStyle(Color.yaplyAccent)
                     }
@@ -252,6 +300,13 @@ struct ChatView: View {
                 onRefresh: { await vm.loadConversationInfo() }
             )
         }
+        .sheet(isPresented: $showDetail) {
+            ConversationDetailView(
+                conversationId: conversationId,
+                currentUserId: currentUserId,
+                initialTab: detailTab
+            )
+        }
         .sheet(item: $threadRoot) { root in
             ThreadView(
                 rootMessage: root,
@@ -270,6 +325,9 @@ struct ChatView: View {
             Button("OK", role: .cancel) { vm.error = nil }
         } message: {
             Text(vm.error ?? "")
+        }
+        .sheet(isPresented: $showHelp) {
+            HelpView()
         }
     }
 
@@ -298,6 +356,80 @@ struct ChatView: View {
         }
         return groups
     }
+
+    private func handleCommand(_ cmd: ParsedCommand) async {
+        switch cmd.name {
+        case "remind":
+            do {
+                try await RemindHandler.execute(args: cmd.args, conversationId: conversationId, userId: currentUserId)
+                showCommandFeedback("⏰ Reminder set")
+            } catch {
+                showCommandFeedback("Failed: \(error.localizedDescription)")
+            }
+        case "mute":
+            do {
+                try await MuteHandler.execute(args: cmd.args, conversationId: conversationId, userId: currentUserId)
+                let label = cmd.args.first ?? "1h"
+                showCommandFeedback("🔇 Muted for \(label)")
+            } catch {
+                showCommandFeedback("Failed: \(error.localizedDescription)")
+            }
+        case "task":
+            if cmd.rawArgs.isBlank { detailTab = "tasks"; showDetail = true }
+            else { await createItem(type: "task", title: cmd.rawArgs) }
+        case "note":
+            if cmd.rawArgs.isBlank { detailTab = "notes"; showDetail = true }
+            else { await createItem(type: "note", title: cmd.rawArgs) }
+        case "album":
+            if cmd.rawArgs.isBlank { detailTab = "albums"; showDetail = true }
+            else { await createItem(type: "album", title: cmd.rawArgs) }
+        case "plan":
+            if cmd.rawArgs.isBlank { detailTab = "events"; showDetail = true }
+            else { await createItem(type: "plan", title: cmd.rawArgs) }
+        case "event":
+            detailTab = "events"
+            showDetail = true
+        case "budget":
+            detailTab = "budgets"
+            showDetail = true
+        case "thread":
+            showCommandFeedback("Open a thread by long-pressing a message and tapping Reply in Thread.")
+        case "help":
+            showHelp = true
+        default:
+            showCommandFeedback("Unknown command /\(cmd.name)")
+        }
+    }
+
+    private func createItem(type: String, title: String) async {
+        switch type {
+        case "task":
+            try? await TaskRepository().createTask(conversationId: conversationId, createdBy: currentUserId, title: title)
+            showCommandFeedback("✓ Task created: \(title)")
+        case "note":
+            try? await NoteRepository().createNote(conversationId: conversationId, userId: currentUserId, title: title)
+            showCommandFeedback("✓ Note created: \(title)")
+        case "album":
+            try? await AlbumRepository().createAlbum(conversationId: conversationId, createdBy: currentUserId, name: title)
+            showCommandFeedback("✓ Album created: \(title)")
+        case "plan":
+            try? await EventRepository().createEvent(conversationId: conversationId, createdBy: currentUserId, name: title, status: "planning")
+            showCommandFeedback("✓ Plan created: \(title)")
+        default:
+            break
+        }
+    }
+
+    private func showCommandFeedback(_ message: String) {
+        feedbackDismissTask?.cancel()
+        withAnimation { commandFeedback = message }
+        feedbackDismissTask = Task {
+            try? await Task.sleep(for: .seconds(5))
+            if !Task.isCancelled {
+                withAnimation { commandFeedback = nil }
+            }
+        }
+    }
 }
 
 private struct TypingDotsView: View {
@@ -315,6 +447,47 @@ private struct TypingDotsView: View {
         }
         .onAppear {
             withAnimation { phase = (phase + 1) % 3 }
+        }
+    }
+}
+
+private struct HelpView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Available Commands") {
+                    ForEach(YaplyCommand.allCases, id: \.rawValue) { cmd in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 6) {
+                                Text("/\(cmd.rawValue)")
+                                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(Color.yaplyAccent)
+                                if let hint = cmd.argHint {
+                                    let pattern = hint.components(separatedBy: "  ").first ?? hint
+                                    Text(pattern)
+                                        .font(.system(size: 13, design: .monospaced))
+                                        .foregroundStyle(Color.yaplySecondary.opacity(0.5))
+                                }
+                            }
+                            Text(cmd.description)
+                                .font(.system(size: 13))
+                                .foregroundStyle(Color.yaplySecondary)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Commands")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(Color.yaplyAccent)
+                }
+            }
         }
     }
 }
