@@ -29,12 +29,13 @@ struct YaplyTask: Codable, Identifiable {
     var priority: String   // "low" | "medium" | "high"
     var dueAt: Date?
     var completedAt: Date?
+    var locked: Bool
     let createdAt: Date
     var updatedAt: Date
     var creator: CreatorProfile?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, description, status, priority, creator
+        case id, title, description, status, priority, creator, locked
         case conversationId = "conversation_id"
         case createdBy      = "created_by"
         case assignedTo     = "assigned_to"
@@ -90,6 +91,24 @@ final class TaskRepository {
             .from("tasks")
             .delete()
             .eq("id", value: id.uuidString)
+            .execute()
+    }
+
+    func setLocked(id: UUID, locked: Bool) async throws {
+        struct Update: Encodable { let locked: Bool; let updated_at: String }
+        try await supabase
+            .from("tasks")
+            .update(Update(locked: locked, updated_at: Date().iso8601))
+            .eq("id", value: id.uuidString)
+            .execute()
+    }
+
+    func updateDueDate(taskId: UUID, dueAt: Date?) async throws {
+        struct Update: Encodable { let due_at: String?; let updated_at: String }
+        try await supabase
+            .from("tasks")
+            .update(Update(due_at: dueAt?.iso8601, updated_at: Date().iso8601))
+            .eq("id", value: taskId.uuidString)
             .execute()
     }
 }

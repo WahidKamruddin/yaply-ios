@@ -81,9 +81,9 @@ struct MessageBubbleView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(Color.white)
+            .background(Color.yaplyTint)
             .clipShape(Capsule())
-            .overlay(Capsule().stroke(Color.yaplyBorder, lineWidth: 0.5))
+            .overlay(Capsule().stroke(Color.yaplyBorderSoft, lineWidth: 0.5))
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 16)
             .padding(.vertical, 4)
@@ -218,14 +218,14 @@ struct MessageBubbleView: View {
             if isRead == true {
                 HStack(spacing: -3) {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 8, weight: .semibold))
+                        .font(.system(size: 10, weight: .semibold))
                     Image(systemName: "checkmark")
-                        .font(.system(size: 8, weight: .semibold))
+                        .font(.system(size: 10, weight: .semibold))
                 }
                 .foregroundStyle(Color.yaplyAccent)
             } else {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Color.yaplySecondary.opacity(0.7))
             }
         }
@@ -241,14 +241,13 @@ struct MessageBubbleView: View {
                         Text(group.emoji).font(.system(size: 14))
                         Text("\(group.count)")
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(group.reactedByMe ? .white : Color.yaplyPrimary)
+                            .foregroundStyle(group.reactedByMe ? Color.yaplyAccent : Color.yaplyPrimary)
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(group.reactedByMe ? Color.yaplyAccent : Color.white)
+                    .background(group.reactedByMe ? Color.yaplyAccent.opacity(0.15) : Color.yaplyCard)
                     .clipShape(Capsule())
-                    .overlay(Capsule().stroke(group.reactedByMe ? Color.clear : Color.yaplyBorder, lineWidth: 1))
-                    .shadow(color: Color.yaplyShadow, radius: 1, y: 1)
+                    .overlay(Capsule().stroke(group.reactedByMe ? Color.yaplyAccent.opacity(0.4) : Color.yaplyBorder, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
             }
@@ -267,9 +266,24 @@ struct MessageBubbleView: View {
                 .foregroundStyle(Color.yaplySecondary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Color.white)
+                .background(Color.yaplyCard)
                 .clipShape(BubbleShape(isOwn: isOwn))
-                .overlay(BubbleShape(isOwn: isOwn).stroke(Color.yaplyBorder, lineWidth: 1))
+                .overlay(BubbleShape(isOwn: isOwn).stroke(Color.yaplyBorderSoft, lineWidth: 1))
+        } else if message.decryptFailed {
+            // Sealed before this device existed (no matching envelope) or a bad
+            // wrap/content — an honest, permanent state. Never render raw ciphertext.
+            HStack(spacing: 6) {
+                Image(systemName: "lock.slash")
+                Text("Couldn't decrypt this message")
+            }
+            .font(.subheadline)
+            .italic()
+            .foregroundStyle(Color.yaplySecondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.yaplyCard)
+            .clipShape(BubbleShape(isOwn: isOwn))
+            .overlay(BubbleShape(isOwn: isOwn).stroke(Color.yaplyBorderSoft, lineWidth: 1))
         } else if message.isMedia, let urlString = message.mediaUrl, let url = URL(string: urlString) {
             AsyncImage(url: url) { phase in
                 switch phase {
@@ -295,9 +309,24 @@ struct MessageBubbleView: View {
                 .foregroundStyle(isOwn ? .white : Color.yaplyPrimary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(isOwn ? Color.yaplyAccent : Color.white)
+                .background(
+                    Group {
+                        if isOwn {
+                            LinearGradient(
+                                colors: [Color.yaplyAccent, Color.yaplyAccentDark],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        } else {
+                            Color.yaplyCard
+                        }
+                    }
+                )
                 .clipShape(BubbleShape(isOwn: isOwn))
-                .shadow(color: Color.yaplyShadow, radius: 2, y: 1)
+                .overlay(
+                    BubbleShape(isOwn: isOwn)
+                        .stroke(isOwn ? Color.clear : Color.yaplyBorderSoft, lineWidth: 1)
+                )
         }
     }
 
@@ -327,9 +356,9 @@ struct MessageBubbleView: View {
                 .padding(.trailing, 14)
             }
             .frame(height: 36)
-            .background(Color(red: 0.941, green: 0.957, blue: 1.0))
+            .background(Color.yaplyTint)
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(red: 0.863, green: 0.906, blue: 0.973), lineWidth: 0.5))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.yaplyBorderSoft, lineWidth: 0.5))
         }
         .buttonStyle(.plain)
     }

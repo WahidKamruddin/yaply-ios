@@ -16,6 +16,9 @@ final class ThreadViewModel {
     private let currentUserId: UUID
     private let repository = MessageRepository()
     private var realtimeTask: Task<Void, Never>?
+    private var identityPrivKeyCache: P256.KeyAgreement.PrivateKey?
+    // Loaded lazily from the parent conversation on first send/decrypt.
+    private var memberUserIds: [UUID]?
 
     init(rootMessage: DecryptedMessage, conversationId: UUID, currentUserId: UUID) {
         self.rootMessage = rootMessage
@@ -38,8 +41,7 @@ final class ThreadViewModel {
     func load() async {
         do {
             let raw = try await repository.fetchThreadMessages(threadRootId: rootMessage.id)
-            let otherUser = raw.first(where: { $0.senderId != nil && $0.senderId != currentUserId })?.senderId
-            replies = await decryptAll(raw, otherUserId: otherUser)
+            replies = await decryptAll(raw)
         } catch {
             self.error = error.localizedDescription
         }
@@ -50,21 +52,29 @@ final class ThreadViewModel {
         isSending = true
         defer { isSending = false }
 
-        let otherUserId = replies.first(where: { $0.senderId != nil && $0.senderId != currentUserId })?.senderId
-            ?? (rootMessage.senderId != currentUserId ? rootMessage.senderId : nil)
-
-        let (content, iv) = await encrypt(plaintext: text, otherUserId: otherUserId)
-        let params = SendMessageParams(
-            conversationId: conversationId,
-            senderId: currentUserId,
-            content: content,
-            iv: iv,
-            type: "text",
-            replyToId: rootMessage.id,
-            threadId: rootMessage.id
-        )
         do {
-            let sent = try await repository.sendMessage(params)
+            try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
+            let memberIds = await resolvedMemberIds()
+
+            let sent: DbMessage
+            if let sealed = await EnvelopeEncryption.encryptForMembers(
+                plaintext: text, memberUserIds: memberIds, repository: repository
+            ) {
+                let params = SendMessageWithEnvelopesParams(
+                    pConversationId: conversationId, pContent: sealed.content, pIv: sealed.iv,
+                    pEnvelopes: sealed.envelopes, pType: "text",
+                    pReplyToId: rootMessage.id, pThreadId: rootMessage.id,
+                    pMediaUrl: nil, pMediaMime: nil
+                )
+                sent = try await repository.sendMessageWithEnvelopes(params)
+            } else {
+                let params = SendMessageParams(
+                    conversationId: conversationId, senderId: currentUserId,
+                    content: Data(text.utf8).base64EncodedString(), iv: nil, type: "text",
+                    replyToId: rootMessage.id, threadId: rootMessage.id
+                )
+                sent = try await repository.sendMessage(params)
+            }
             replies.append(DecryptedMessage(
                 id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
                 content: text, type: sent.type, replyToId: rootMessage.id,
@@ -73,6 +83,27 @@ final class ThreadViewModel {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    // Every member of the parent conversation, including the sender — fetched once
+    // and cached for the life of this thread's view model.
+    private func resolvedMemberIds() async -> [UUID] {
+        if let cached = memberUserIds { return cached }
+        struct MemberRow: Decodable {
+            let userId: UUID
+            enum CodingKeys: String, CodingKey { case userId = "user_id" }
+        }
+        let rows: [MemberRow] = (try? await supabase
+            .from("conversation_members")
+            .select("user_id")
+            .eq("conversation_id", value: conversationId.uuidString)
+            .execute()
+            .value) ?? []
+        var ids = Set(rows.map(\.userId))
+        ids.insert(currentUserId)
+        let resolved = Array(ids)
+        memberUserIds = resolved
+        return resolved
     }
 
     // MARK: - Realtime
@@ -90,77 +121,48 @@ final class ThreadViewModel {
         }
     }
 
-    // MARK: - Encryption (mirrors ChatViewModel)
+    // MARK: - Encryption (v2 — mirrors ChatViewModel's decryptDbMessage)
 
-    private func decryptAll(_ raw: [DbMessage], otherUserId: UUID?) async -> [DecryptedMessage] {
+    private func decryptAll(_ raw: [DbMessage]) async -> [DecryptedMessage] {
         var result: [DecryptedMessage] = []
         for msg in raw {
-            var content = msg.content
-            let isFromOther = msg.senderId != nil && msg.senderId != currentUserId
-            if isFromOther, let otherId = msg.senderId ?? otherUserId {
-                content = await decryptContent(msg.content, iv: msg.iv, otherUserId: otherId)
-            } else if msg.iv == nil {
-                content = EncryptionService.decryptLegacy(msg.content) ?? msg.content
-            }
+            let (content, failed) = await decryptDbMessage(msg)
             result.append(DecryptedMessage(
                 id: msg.id, conversationId: msg.conversationId, senderId: msg.senderId,
                 content: content, type: msg.type, mediaUrl: msg.mediaUrl,
                 replyToId: msg.replyToId, threadId: msg.threadId,
                 editedAt: msg.editedAt, deletedAt: msg.deletedAt, createdAt: msg.createdAt,
-                senderProfile: msg.senderProfile
+                senderProfile: msg.senderProfile, decryptFailed: failed
             ))
         }
         return result
     }
 
-    private func encrypt(plaintext: String, otherUserId: UUID?) async -> (content: String, iv: String?) {
-        guard let otherUserId else {
-            return (Data(plaintext.utf8).base64EncodedString(), nil)
-        }
-        do {
-            let key = try await sharedKey(for: otherUserId)
-            let result = try EncryptionService.encryptMessage(plaintext, key: key)
-            return result
-        } catch {
-            return (Data(plaintext.utf8).base64EncodedString(), nil)
+    private func decryptDbMessage(_ msg: DbMessage) async -> (content: String, failed: Bool) {
+        if msg.encV == 2 {
+            guard let iv = msg.iv else { return ("", true) }
+            // Await registration BEFORE giving up on a missing identity key — a
+            // device that hasn't finished registering yet must get the chance to
+            // before this is reported as a decrypt failure.
+            try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
+            guard let privKey = loadedIdentityPrivateKey() else { return ("", true) }
+            guard let plaintext = await EnvelopeEncryption.decryptV2(
+                messageId: msg.id, content: msg.content, iv: iv,
+                repository: repository, myPrivateKey: privKey,
+                myFingerprint: EncryptionService.fingerprint(for: privKey.publicKey)
+            ) else { return ("", true) }
+            return (plaintext, false)
+        } else if msg.encV == nil && msg.iv == nil {
+            return (EncryptionService.decryptLegacy(msg.content) ?? msg.content, false)
+        } else {
+            return ("", true)
         }
     }
 
-    private func decryptContent(_ content: String, iv: String?, otherUserId: UUID) async -> String {
-        do {
-            let key = try await sharedKey(for: otherUserId)
-            return try EncryptionService.decryptMessage(content: content, iv: iv, key: key)
-        } catch {
-            return EncryptionService.decryptLegacy(content) ?? content
-        }
-    }
-
-    private func sharedKey(for otherUserId: UUID) async throws -> SymmetricKey {
-        if let cached = try? KeyStore.loadDerivedKey(forConversation: conversationId) { return cached }
-
-        guard let myPrivKey = try KeyStore.loadIdentityKeyPair() else {
-            throw EncryptionService.Error.invalidJWK
-        }
-
-        struct DeviceKeyRow: Decodable {
-            struct JWKCoords: Decodable { let x: String; let y: String }
-            let identityKey: JWKCoords?
-            enum CodingKeys: String, CodingKey { case identityKey = "identity_key" }
-        }
-
-        let row: DeviceKeyRow = try await supabase
-            .from("devices")
-            .select("identity_key")
-            .eq("user_id", value: otherUserId.uuidString)
-            .eq("device_id", value: 1)
-            .single()
-            .execute()
-            .value
-
-        guard let coords = row.identityKey else { throw EncryptionService.Error.invalidJWK }
-        let pubKey = try EncryptionService.publicKeyFromJWK(["x": coords.x, "y": coords.y])
-        let key = try EncryptionService.deriveSharedKey(myPrivateKey: myPrivKey, theirPublicKey: pubKey)
-        try KeyStore.storeDerivedKey(key, forConversation: conversationId)
+    private func loadedIdentityPrivateKey() -> P256.KeyAgreement.PrivateKey? {
+        if let cached = identityPrivKeyCache { return cached }
+        let key = try? KeyStore.loadIdentityKeyPair()
+        identityPrivKeyCache = key
         return key
     }
 }

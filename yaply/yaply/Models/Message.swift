@@ -6,6 +6,9 @@ struct DbMessage: Codable, Identifiable {
     let senderId: UUID?
     var content: String
     var iv: String?
+    // enc_v == 2 means envelope-encrypted (fetch this device's `message_envelopes`
+    // row to unwrap); nil means phase-1 plain base64. Branch on this BEFORE iv.
+    var encV: Int?
     var type: String
     var mediaUrl: String?
     var mediaMime: String?
@@ -20,7 +23,9 @@ struct DbMessage: Codable, Identifiable {
         case id
         case conversationId  = "conversation_id"
         case senderId        = "sender_id"
-        case content, iv, type
+        case content, iv
+        case encV            = "enc_v"
+        case type
         case mediaUrl        = "media_url"
         case mediaMime       = "media_mime"
         case replyToId       = "reply_to_id"
@@ -47,6 +52,10 @@ struct DecryptedMessage: Identifiable, Hashable {
     var deletedAt: Date?
     var createdAt: Date
     var senderProfile: Profile?
+    // True when this is an enc_v=2 message with no envelope for this device (sealed
+    // before this device existed) or any other decrypt failure — an honest, permanent
+    // state. `content` is left empty; never render raw ciphertext or garbled bytes.
+    var decryptFailed: Bool = false
 
     var isDeleted: Bool { deletedAt != nil }
     var isText: Bool { type == "text" }

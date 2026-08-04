@@ -3,6 +3,7 @@ import SwiftUI
 struct BudgetListView: View {
     let conversationId: UUID
     let currentUserId: UUID
+    var isCurrentUserAdmin: Bool = false
 
     @State private var budgets: [YaplyBudget] = []
     @State private var events: [YaplyEvent] = []
@@ -28,48 +29,67 @@ struct BudgetListView: View {
                     Spacer()
                 } else if budgets.isEmpty {
                     Spacer()
-                    VStack(spacing: 8) {
-                        Image(systemName: "dollarsign.circle")
-                            .font(.system(size: 40))
-                            .foregroundStyle(Color.yaplySecondary)
-                        Text("No budgets yet")
-                            .foregroundStyle(Color.yaplySecondary)
-                    }
+                    EmptyStateView(icon: "dollarsign.circle", title: "No budgets yet")
                     Spacer()
                 } else {
                     List {
                         ForEach(budgets) { budget in
                             BudgetRowView(budget: budget, events: events)
+                                .yaplyCardStyle()
+                                .yaplyCardRowContainer()
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    if budget.createdBy == currentUserId {
-                                        Button(role: .destructive) {
-                                            budgetToDelete = budget
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
+                                    let canDelete = budget.createdBy == currentUserId || isCurrentUserAdmin
+                                    let effectiveCanDelete = canDelete && (!budget.locked || isCurrentUserAdmin)
+                                    Button(role: effectiveCanDelete ? .destructive : .none) {
+                                        if effectiveCanDelete { budgetToDelete = budget }
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                    .tint(effectiveCanDelete ? Color.yaplyDanger : Color(UIColor.systemGray4))
+
+                                    // Link/Unlink are member-mutating actions on a shared
+                                    // budget — gate them the same as Delete, not left open
+                                    // to any member (RLS silently rejects non-creator/admin
+                                    // updates, which previously failed with no feedback).
+                                    if canDelete {
+                                        if budget.eventId != nil {
+                                            Button {
+                                                Task {
+                                                    try? await repo.unlinkFromEvent(budgetId: budget.id)
+                                                    await load()
+                                                }
+                                            } label: {
+                                                Label("Unlink", systemImage: "link.badge.minus")
+                                            }
+                                            .tint(.orange)
+                                        } else {
+                                            Button {
+                                                budgetToLink = budget
+                                            } label: {
+                                                Label("Link Event", systemImage: "link")
+                                            }
+                                            .tint(Color.yaplyAccent)
                                         }
                                     }
-                                    if budget.eventId != nil {
+                                }
+                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                    if isCurrentUserAdmin {
                                         Button {
                                             Task {
-                                                try? await repo.unlinkFromEvent(budgetId: budget.id)
+                                                try? await repo.setLocked(id: budget.id, locked: !budget.locked)
                                                 await load()
                                             }
                                         } label: {
-                                            Label("Unlink", systemImage: "link.badge.minus")
+                                            Label(budget.locked ? "Unlock" : "Lock",
+                                                  systemImage: budget.locked ? "lock.open" : "lock")
                                         }
                                         .tint(.orange)
-                                    } else {
-                                        Button {
-                                            budgetToLink = budget
-                                        } label: {
-                                            Label("Link Event", systemImage: "link")
-                                        }
-                                        .tint(Color.yaplyAccent)
                                     }
                                 }
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
         }
@@ -119,7 +139,7 @@ struct BudgetListView: View {
             }
             Button("Cancel", role: .cancel) { budgetToDelete = nil }
         } message: {
-            Text("\"\(budgetToDelete?.name ?? "")\" and all its expenses will be permanently deleted.")
+            Text("\"\(budgetToDelete?.name ?? "")\" and all its expenses will be permanently deleted. This cannot be undone.")
         }
     }
 
@@ -183,16 +203,23 @@ private struct BudgetRowView: View {
         HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(red: 0.9, green: 0.97, blue: 0.92))
+                    .fill(Color.yaplyConfirmedGreen)
                     .frame(width: 36, height: 36)
                 Image(systemName: "dollarsign.circle")
                     .font(.system(size: 14))
-                    .foregroundStyle(Color.green)
+                    .foregroundStyle(Color.yaplyMint)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(budget.name)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Color.yaplyPrimary)
+                HStack(spacing: 4) {
+                    if budget.locked {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.orange)
+                    }
+                    Text(budget.name)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color.yaplyPrimary)
+                }
                 if let eventName = linkedEventName {
                     Label(eventName, systemImage: "link")
                         .font(.caption)
@@ -208,6 +235,6 @@ private struct BudgetRowView: View {
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
     }
 }

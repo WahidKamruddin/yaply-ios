@@ -3,12 +3,15 @@ import SwiftUI
 struct TaskListView: View {
     let conversationId: UUID
     let currentUserId: UUID
+    var isCurrentUserAdmin: Bool = false
 
     @State private var tasks: [YaplyTask] = []
     @State private var isLoading = false
     @State private var newTaskTitle = ""
     @State private var showAdd = false
     @State private var taskToDelete: YaplyTask?
+    @State private var taskToEditDueDate: YaplyTask?
+    @State private var editDueDate = Date()
 
     private let repo = TaskRepository()
 
@@ -23,33 +26,48 @@ struct TaskListView: View {
                     Spacer()
                 } else if tasks.isEmpty {
                     Spacer()
-                    VStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle")
-                            .font(.system(size: 40))
-                            .foregroundStyle(Color.yaplySecondary)
-                        Text("No tasks yet")
-                            .foregroundStyle(Color.yaplySecondary)
-                    }
+                    EmptyStateView(icon: "checkmark.circle", title: "No tasks yet")
                     Spacer()
                 } else {
                     List {
                         ForEach(tasks) { task in
-                            TaskRowView(task: task) { newStatus in
-                                Task { try? await repo.updateStatus(taskId: task.id, status: newStatus) }
-                            }
-                            .listRowBackground(Color.white)
+                            TaskRowView(
+                                task: task,
+                                isCurrentUserAdmin: isCurrentUserAdmin,
+                                onStatusChange: { newStatus in
+                                    guard !task.locked || isCurrentUserAdmin else { return }
+                                    Task { try? await repo.updateStatus(taskId: task.id, status: newStatus) }
+                                }
+                            )
+                            .yaplyCardStyle()
+                            .yaplyCardRowContainer()
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                let isCreator = task.createdBy == currentUserId
-                                Button(role: isCreator ? .destructive : .none) {
-                                    if isCreator { taskToDelete = task }
+                                let canDelete = task.createdBy == currentUserId || isCurrentUserAdmin
+                                let effectiveCanDelete = canDelete && (!task.locked || isCurrentUserAdmin)
+                                Button(role: effectiveCanDelete ? .destructive : .none) {
+                                    if effectiveCanDelete { taskToDelete = task }
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
-                                .tint(isCreator ? .red : Color(UIColor.systemGray4))
+                                .tint(effectiveCanDelete ? Color.yaplyDanger : Color(UIColor.systemGray4))
+                            }
+                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                if isCurrentUserAdmin {
+                                    Button {
+                                        Task { try? await repo.setLocked(id: task.id, locked: !task.locked)
+                                            await load()
+                                        }
+                                    } label: {
+                                        Label(task.locked ? "Unlock" : "Lock",
+                                              systemImage: task.locked ? "lock.open" : "lock")
+                                    }
+                                    .tint(.orange)
+                                }
                             }
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
         }
@@ -71,6 +89,30 @@ struct TaskListView: View {
         .sheet(isPresented: $showAdd) {
             addTaskSheet
         }
+        .sheet(item: $taskToEditDueDate) { task in
+            NavigationStack {
+                Form {
+                    DatePicker("Due date", selection: $editDueDate, displayedComponents: [.date, .hourAndMinute])
+                }
+                .navigationTitle("Edit Due Date")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { taskToEditDueDate = nil }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            Task {
+                                try? await repo.updateDueDate(taskId: task.id, dueAt: editDueDate)
+                                taskToEditDueDate = nil
+                                await load()
+                            }
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
         .alert("Delete Task", isPresented: Binding(
             get: { taskToDelete != nil },
             set: { if !$0 { taskToDelete = nil } }
@@ -85,7 +127,7 @@ struct TaskListView: View {
             }
             Button("Cancel", role: .cancel) { taskToDelete = nil }
         } message: {
-            Text("\"\(taskToDelete?.title ?? "")\" will be permanently deleted.")
+            Text("\"\(taskToDelete?.title ?? "")\" will be permanently deleted. This cannot be undone.")
         }
     }
 
@@ -124,7 +166,10 @@ struct TaskListView: View {
 
 private struct TaskRowView: View {
     let task: YaplyTask
+    let isCurrentUserAdmin: Bool
     let onStatusChange: (String) -> Void
+
+    @State private var showEditDueDate = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -137,12 +182,20 @@ private struct TaskRowView: View {
                     .foregroundStyle(task.status == "done" ? Color.yaplyAccent : Color.yaplySecondary)
             }
             .buttonStyle(.plain)
+            .disabled(task.locked && !isCurrentUserAdmin)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(task.title)
-                    .font(.system(size: 15))
-                    .strikethrough(task.status == "done")
-                    .foregroundStyle(task.status == "done" ? Color.yaplySecondary : Color.yaplyPrimary)
+                HStack(spacing: 4) {
+                    if task.locked {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.orange)
+                    }
+                    Text(task.title)
+                        .font(.system(size: 15))
+                        .strikethrough(task.status == "done")
+                        .foregroundStyle(task.status == "done" ? Color.yaplySecondary : Color.yaplyPrimary)
+                }
                 HStack(spacing: 4) {
                     Text(task.priority.capitalized + " priority")
                         .foregroundStyle(priorityColor)
@@ -150,11 +203,30 @@ private struct TaskRowView: View {
                         .foregroundStyle(Color.yaplySecondary.opacity(0.5))
                     Text("by \(task.creator?.name ?? "Unknown")")
                         .foregroundStyle(Color.yaplySecondary)
+                    if let due = task.dueAt {
+                        Text("·")
+                            .foregroundStyle(Color.yaplySecondary.opacity(0.5))
+                        Text(due.formatted(.dateTime.month(.abbreviated).day()))
+                            .foregroundStyle(due < Date() ? .red : Color.yaplySecondary)
+                        if isCurrentUserAdmin {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 9))
+                                .foregroundStyle(Color.yaplySecondary)
+                                .onTapGesture { showEditDueDate = true }
+                        }
+                    }
                 }
                 .font(.caption)
             }
         }
         .padding(.vertical, 4)
+        .sheet(isPresented: $showEditDueDate) {
+            dueDateSheet
+        }
+    }
+
+    private var dueDateSheet: some View {
+        EditDueDateSheet(task: task, onSave: { _ in showEditDueDate = false })
     }
 
     private var priorityColor: Color {
@@ -163,5 +235,44 @@ private struct TaskRowView: View {
         case "medium": return .orange
         default:       return Color.yaplySecondary
         }
+    }
+}
+
+private struct EditDueDateSheet: View {
+    let task: YaplyTask
+    let onSave: (Date) -> Void
+    @State private var date: Date
+    @Environment(\.dismiss) private var dismiss
+    private let repo = TaskRepository()
+
+    init(task: YaplyTask, onSave: @escaping (Date) -> Void) {
+        self.task = task
+        self.onSave = onSave
+        _date = State(initialValue: task.dueAt ?? Date())
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                DatePicker("Due date", selection: $date, displayedComponents: [.date, .hourAndMinute])
+            }
+            .navigationTitle("Edit Due Date")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        Task {
+                            try? await repo.updateDueDate(taskId: task.id, dueAt: date)
+                            onSave(date)
+                            dismiss()
+                        }
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }

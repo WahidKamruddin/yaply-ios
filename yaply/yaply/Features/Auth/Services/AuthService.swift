@@ -21,15 +21,32 @@ final class AuthService {
     func signIn(email: String, password: String) async throws {
         let session = try await supabase.auth.signIn(email: email, password: password)
         currentUser = session.user
-        await initEncryptionKeys(userId: session.user.id)
+        await ensureEncryptionKeys(userId: session.user.id)
     }
 
-    func signUp(email: String, password: String, username: String) async throws {
-        try await supabase.auth.signUp(
-            email: email,
-            password: password,
-            data: ["username": .string(username)]
+    // Drives an ASWebAuthenticationSession internally (supabase-swift's
+    // signInWithOAuth) and exchanges the redirect for a session — the
+    // yaply://login-callback scheme is registered in Info.plist and must be
+    // added to the Supabase Dashboard's OAuth redirect URL allow-list.
+    func signInWithGoogle() async throws {
+        let session = try await supabase.auth.signInWithOAuth(
+            provider: .google,
+            redirectTo: URL(string: "yaply://login-callback")!
         )
+        currentUser = session.user
+        await ensureEncryptionKeys(userId: session.user.id)
+    }
+
+    // No username collected at signup — mirrors web: the handle_new_user()
+    // Postgres trigger seeds a placeholder username from the email and sets
+    // username_set = false, which the client prompts to replace on first
+    // login (see UsernameSetupView).
+    func signUp(email: String, password: String) async throws {
+        try await supabase.auth.signUp(email: email, password: password)
+    }
+
+    func resendConfirmationEmail(email: String) async throws {
+        try await supabase.auth.resend(email: email, type: .signup)
     }
 
     func signOut() async throws {
@@ -44,7 +61,7 @@ final class AuthService {
         // Restore existing session immediately
         if let session = try? await supabase.auth.session {
             currentUser = session.user
-            await initEncryptionKeys(userId: session.user.id)
+            await ensureEncryptionKeys(userId: session.user.id)
         }
         isLoading = false
 
@@ -54,7 +71,7 @@ final class AuthService {
             case .signedIn:
                 currentUser = session?.user
                 if let user = session?.user {
-                    await initEncryptionKeys(userId: user.id)
+                    await ensureEncryptionKeys(userId: user.id)
                 }
             case .signedOut:
                 currentUser = nil
@@ -67,27 +84,14 @@ final class AuthService {
 
     // MARK: — Encryption init on login (mirrors useEncryption's initKeys)
 
-    // Generates an ECDH P-256 keypair on first login and upserts the public key
-    // to the `devices` table (device_id = 1) so other users can derive shared keys.
-    private func initEncryptionKeys(userId: UUID) async {
+    // Generates (or loads) this install's identity keypair + device_id and upserts
+    // the v2 device row (identity_key, key_fingerprint) so other users' devices can
+    // wrap message keys to it. Routed through EncryptionRegistrar.shared so the
+    // three call sites above (signIn, restore, auth-state listener) can never race
+    // each other into generating two different keypairs on a fresh install.
+    private func ensureEncryptionKeys(userId: UUID) async {
         do {
-            let privateKey: P256.KeyAgreement.PrivateKey
-
-            if let existing = try KeyStore.loadIdentityKeyPair() {
-                privateKey = existing
-            } else {
-                privateKey = EncryptionService.generateKeyPair()
-                try KeyStore.storeIdentityKeyPair(privateKey)
-            }
-
-            let jwk = EncryptionService.publicKeyToJWK(privateKey.publicKey)
-            let params = UpsertDeviceParams(userId: userId, deviceId: 1, identityKey: jwk)
-
-            try await supabase
-                .from("devices")
-                .upsert(params, onConflict: "user_id,device_id")
-                .execute()
-
+            try await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: userId)
         } catch {
             // Non-fatal — app works without encryption, falls back to base64
             print("[AuthService] Encryption init failed: \(error)")

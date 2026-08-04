@@ -8,6 +8,7 @@ struct YaplyAlbum: Codable, Identifiable {
     var name: String
     let createdBy: UUID
     let createdAt: Date
+    var locked: Bool
     var creator: CreatorProfile?
     var eventId: UUID?
     var albumMedia: [AlbumMediaThumb]?
@@ -20,7 +21,7 @@ struct YaplyAlbum: Codable, Identifiable {
     var coverUrl: String? { albumMedia?.first?.mediaUrl }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, creator
+        case id, name, creator, locked
         case conversationId = "conversation_id"
         case createdBy      = "created_by"
         case createdAt      = "created_at"
@@ -120,6 +121,15 @@ final class AlbumRepository {
         try await supabase
             .from("album_media")
             .insert(Insert(album_id: albumId.uuidString, message_id: messageId.uuidString, media_url: mediaUrl, media_mime: mediaMime))
+            .execute()
+    }
+
+    func setLocked(id: UUID, locked: Bool) async throws {
+        struct Update: Encodable { let locked: Bool }
+        try await supabase
+            .from("albums")
+            .update(Update(locked: locked))
+            .eq("id", value: id.uuidString)
             .execute()
     }
 }

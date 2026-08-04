@@ -12,5 +12,23 @@
 	<string>$(SUPABASE_ANON_KEY)</string>
 	<key>SUPABASE_URL</key>
 	<string>$(SUPABASE_URL)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>yaply</string>
+			</array>
+			<key>CFBundleURLName</key>
+			<string>com.yaply.oauth</string>
+		</dict>
+	</array>
+	<key>UIAppFonts</key>
+	<array>
+		<string>BricolageGrotesque-Medium.ttf</string>
+		<string>BricolageGrotesque-SemiBold.ttf</string>
+		<string>BricolageGrotesque-Bold.ttf</string>
+		<string>BricolageGrotesque-ExtraBold.ttf</string>
+	</array>
 </dict>
 </plist>

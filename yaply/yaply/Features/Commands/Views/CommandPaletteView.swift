@@ -59,7 +59,7 @@ struct CommandPaletteView: View {
                 .overlay(alignment: .top) { Divider() }
             }
         }
-        .background(Color.white)
+        .background(Color.yaplySurface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.yaplyBorder))
         .shadow(color: Color.yaplyShadow, radius: 8, y: -4)

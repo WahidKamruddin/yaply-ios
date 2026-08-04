@@ -7,6 +7,7 @@ struct GroupInfoView: View {
     let conversationName: String
     let currentUserId: UUID
     let onRefresh: () async -> Void
+    var onDeleted: (() -> Void)? = nil
 
     @State private var members: [MemberSummary] = []
     @State private var isLoading = false
@@ -14,6 +15,11 @@ struct GroupInfoView: View {
     @State private var searchResults: [Profile] = []
     @State private var isSearching = false
     @State private var error: String?
+    @State private var promoting: UUID? = nil
+    @State private var memberToRemove: MemberSummary? = nil
+    @State private var memberToPromote: MemberSummary? = nil
+    @State private var showDeleteGroupConfirm = false
+    @State private var isDeletingGroup = false
     @Environment(\.dismiss) private var dismiss
 
     private let convRepository = ConversationRepository()
@@ -55,7 +61,7 @@ struct GroupInfoView: View {
                                     Circle()
                                         .fill(member.profile.isOnline ? Color.green : Color.yaplySecondary)
                                         .frame(width: 9, height: 9)
-                                        .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
+                                        .overlay(Circle().stroke(Color.yaplySurface, lineWidth: 1.5))
                                 }
                                 VStack(alignment: .leading, spacing: 2) {
                                     HStack(spacing: 4) {
@@ -79,17 +85,56 @@ struct GroupInfoView: View {
                                 }
                                 Spacer()
                                 if currentMemberIsAdmin && member.userId != currentUserId {
-                                    Button(role: .destructive) {
-                                        Task { await removeMember(member.userId) }
-                                    } label: {
-                                        Image(systemName: "minus.circle.fill")
-                                            .foregroundStyle(.red)
-                                            .font(.system(size: 20))
+                                    HStack(spacing: 8) {
+                                        if !member.isAdmin {
+                                            Button {
+                                                memberToPromote = member
+                                            } label: {
+                                                if promoting == member.userId {
+                                                    ProgressView().scaleEffect(0.7)
+                                                } else {
+                                                    Image(systemName: "shield.fill")
+                                                        .foregroundStyle(Color.yaplyAccent)
+                                                        .font(.system(size: 18))
+                                                }
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                        Button {
+                                            memberToRemove = member
+                                        } label: {
+                                            Image(systemName: "minus.circle.fill")
+                                                .foregroundStyle(.red)
+                                                .font(.system(size: 20))
+                                        }
+                                        .buttonStyle(.plain)
                                     }
-                                    .buttonStyle(.plain)
                                 }
                             }
                         }
+                    }
+                }
+
+                // Delete group section (admin/owner only)
+                if currentMemberIsAdmin {
+                    Section {
+                        Button(role: .destructive) {
+                            showDeleteGroupConfirm = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.red)
+                                Text("Delete Group for Everyone")
+                                    .foregroundStyle(.red)
+                            }
+                        }
+                        .disabled(isDeletingGroup)
+                    } header: {
+                        Text("Danger Zone")
+                    } footer: {
+                        Text("Permanently deletes the group, all messages, and all shared content for every member.")
+                            .font(.caption)
+                            .foregroundStyle(Color.yaplySecondary)
                     }
                 }
 
@@ -146,6 +191,40 @@ struct GroupInfoView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(error ?? "")
+            }
+            .alert("Make Admin?", isPresented: Binding(
+                get: { memberToPromote != nil },
+                set: { if !$0 { memberToPromote = nil } }
+            )) {
+                Button("Make Admin") {
+                    guard let m = memberToPromote else { return }
+                    memberToPromote = nil
+                    Task { await promoteToAdmin(m.userId) }
+                }
+                Button("Cancel", role: .cancel) { memberToPromote = nil }
+            } message: {
+                Text("\(memberToPromote?.profile.name ?? "This member") will be able to add/remove members, delete any item, and delete the group.")
+            }
+            .alert("Remove Member?", isPresented: Binding(
+                get: { memberToRemove != nil },
+                set: { if !$0 { memberToRemove = nil } }
+            )) {
+                Button("Remove", role: .destructive) {
+                    guard let m = memberToRemove else { return }
+                    memberToRemove = nil
+                    Task { await removeMember(m.userId) }
+                }
+                Button("Cancel", role: .cancel) { memberToRemove = nil }
+            } message: {
+                Text("\(memberToRemove?.profile.name ?? "This member") will lose access to this group and all its messages.")
+            }
+            .alert("Delete Group for Everyone?", isPresented: $showDeleteGroupConfirm) {
+                Button("Delete", role: .destructive) {
+                    Task { await deleteGroupForEveryone() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will permanently delete \"\(conversationName)\" and all its messages for every member. This cannot be undone.")
             }
             .task { await loadMembers() }
         }
@@ -210,6 +289,30 @@ struct GroupInfoView: View {
             members.removeAll { $0.userId == userId }
             await onRefresh()
         } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func promoteToAdmin(_ userId: UUID) async {
+        promoting = userId
+        defer { promoting = nil }
+        do {
+            try await convRepository.promoteMemberToAdmin(conversationId: conversationId, targetUserId: userId)
+            await loadMembers()
+            await onRefresh()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func deleteGroupForEveryone() async {
+        isDeletingGroup = true
+        do {
+            try await convRepository.deleteGroupForEveryone(conversationId: conversationId)
+            dismiss()
+            onDeleted?()
+        } catch {
+            isDeletingGroup = false
             self.error = error.localizedDescription
         }
     }

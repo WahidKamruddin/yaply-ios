@@ -25,7 +25,6 @@
 		CEB2BC502FD293CC00A6D20D /* Exceptions for "yaply" folder in "yaply" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				Features/Chat/Repositories/PresenceService.swift,
 				"Features/Commands/Handlers/ConversationRepository 2.swift",
 				Features/Commands/Handlers/ConversationRepository.swift,
 				Info.plist,

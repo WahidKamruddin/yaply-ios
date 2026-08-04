@@ -5,6 +5,8 @@ struct ContentView: View {
     @Environment(AuthService.self) private var authService
     @Environment(AppRouter.self) private var router
     @Environment(NotificationManager.self) private var notifications
+    @AppStorage("appearanceMode") private var appearanceMode: AppearanceMode = .system
+    @State private var suggestedUsername: String?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -15,6 +17,20 @@ struct ContentView: View {
                     AuthView(authService: authService)
                 } else if let userId = authService.currentUser?.id {
                     mainNavigationView(userId: userId)
+                        .task(id: userId) {
+                            suggestedUsername = await UsernameSetupViewModel.needsSetup(userId: userId)
+                        }
+                        .fullScreenCover(isPresented: Binding(
+                            get: { suggestedUsername != nil },
+                            set: { if !$0 { suggestedUsername = nil } }
+                        )) {
+                            UsernameSetupView(
+                                userId: userId,
+                                suggestedUsername: suggestedUsername ?? "",
+                                onComplete: { suggestedUsername = nil }
+                            )
+                            .presentationBackground(.clear)
+                        }
                 }
             }
 
@@ -35,18 +51,14 @@ struct ContentView: View {
             }
         }
         .animation(.spring(duration: 0.35), value: notifications.current?.id)
+        .preferredColorScheme(appearanceMode.colorScheme)
     }
 
     private var splashView: some View {
         ZStack {
             Color.yaplyBackground.ignoresSafeArea()
             VStack(spacing: 16) {
-                Circle()
-                    .fill(Color.yaplyAccent)
-                    .frame(width: 56, height: 56)
-                    .overlay(
-                        Text("Y").font(.system(size: 24, weight: .bold)).foregroundStyle(.white)
-                    )
+                YaplyLogoMark(size: 56)
                 ProgressView().tint(Color.yaplyAccent)
             }
         }
@@ -72,8 +84,7 @@ struct ContentView: View {
                 currentUsername: authService.currentUser?.userMetadata["username"]?.stringValue
                     ?? authService.currentUser?.email?.components(separatedBy: "@").first
                     ?? "Me",
-                conversationName: "Chat",
-                otherMember: nil
+                conversationName: "Chat"
             )
         case .newConversation:
             NewConversationView(currentUserId: userId) { convId in
@@ -83,10 +94,14 @@ struct ContentView: View {
             TaskListView(conversationId: convId, currentUserId: userId)
         case .noteList:
             Text("Notes — coming soon").foregroundStyle(Color.yaplySecondary)
-        case .profile:
-            Text("Profile — coming soon").foregroundStyle(Color.yaplySecondary)
         case .settings:
             SettingsView()
+        case .settingsDetail(let tab):
+            SettingsDetailView(
+                tab: tab,
+                userId: userId,
+                userEmail: authService.currentUser?.email ?? ""
+            )
         }
     }
 }

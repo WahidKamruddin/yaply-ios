@@ -18,10 +18,7 @@ struct ConversationRowView: View {
                     size: 48
                 )
                 if !item.isGroup {
-                    Circle()
-                        .fill(isOnline ? Color.green : Color.yaplySecondary)
-                        .frame(width: 12, height: 12)
-                        .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                    PresenceDotView(isOnline: isOnline, borderColor: .yaplyBackground, size: 12)
                 }
             }
 
@@ -29,7 +26,7 @@ struct ConversationRowView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
                     Text(displayName)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.display(15, weight: .semibold))
                         .foregroundStyle(Color.yaplyPrimary)
                         .lineLimit(1)
                     Spacer()
@@ -46,9 +43,13 @@ struct ConversationRowView: View {
                         .lineLimit(1)
                     Spacer()
                     if item.unreadCount > 0 {
-                        Circle()
-                            .fill(Color.yaplyAccent)
-                            .frame(width: 8, height: 8)
+                        Text(item.unreadCount > 99 ? "99+" : "\(item.unreadCount)")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .frame(minWidth: 18, minHeight: 18)
+                            .background(Color.yaplyAccent)
+                            .clipShape(Capsule())
                     }
                     if item.isMuted {
                         Image(systemName: "bell.slash.fill")
@@ -60,7 +61,22 @@ struct ConversationRowView: View {
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 16)
-        .background(Color.white)
+        .background(.clear)
+    }
+}
+
+// MARK: — Presence dot
+
+struct PresenceDotView: View {
+    let isOnline: Bool
+    var borderColor: Color = .yaplyBackground
+    var size: CGFloat = 12
+
+    var body: some View {
+        Circle()
+            .fill(isOnline ? Color.yaplyOnline : Color.yaplyOffline)
+            .frame(width: size, height: size)
+            .overlay(Circle().stroke(borderColor, lineWidth: 2))
     }
 }
 
@@ -90,7 +106,13 @@ struct AvatarView: View {
 
     private var fallbackAvatar: some View {
         Circle()
-            .fill(Color.yaplyAccent)
+            .fill(
+                LinearGradient(
+                    colors: [Color.yaplyAccent, Color.yaplyAccentDark],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
             .frame(width: size, height: size)
             .overlay(
                 Text(String(name.prefix(1)).uppercased())

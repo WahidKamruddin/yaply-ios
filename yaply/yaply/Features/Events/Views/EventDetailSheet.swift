@@ -106,7 +106,7 @@ struct EventDetailSheet: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white)
+            .background(Color.yaplySurface)
             .overlay(alignment: .bottom) { Divider() }
 
             AvailabilityCalendarView(event: event, currentUserId: currentUserId)
@@ -159,7 +159,7 @@ struct EventDetailSheet: View {
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.white)
+                .background(Color.yaplySurface)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
 
                 // RSVP section
@@ -204,7 +204,7 @@ struct EventDetailSheet: View {
                     }
                 }
                 .padding(16)
-                .background(Color.white)
+                .background(Color.yaplySurface)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
 
                 // Linked Albums
@@ -359,7 +359,7 @@ struct EventDetailSheet: View {
                             HStack(spacing: 10) {
                                 ZStack {
                                     RoundedRectangle(cornerRadius: 6)
-                                        .fill(Color(red: 0.9, green: 0.97, blue: 0.92))
+                                        .fill(Color.yaplyConfirmedGreen)
                                         .frame(width: 28, height: 28)
                                     Image(systemName: "dollarsign.circle")
                                         .font(.system(size: 12))
@@ -423,7 +423,7 @@ struct EventDetailSheet: View {
         HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(red: 0.9, green: 0.97, blue: 0.92))
+                    .fill(Color.yaplyConfirmedGreen)
                     .frame(width: 28, height: 28)
                 Image(systemName: "dollarsign.circle")
                     .font(.system(size: 12))
@@ -478,7 +478,7 @@ struct EventDetailSheet: View {
             }
         }
         .padding(16)
-        .background(Color.white)
+        .background(Color.yaplySurface)
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 
@@ -516,8 +516,8 @@ struct EventDetailSheet: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(event.isPlanning
-                ? Color(red: 0.929, green: 0.945, blue: 0.980)
-                : Color(red: 0.9, green: 0.97, blue: 0.9))
+                ? Color.yaplyBackground
+                : Color.yaplyConfirmedGreen)
             .foregroundStyle(event.isPlanning ? Color.yaplyAccent : .green)
             .clipShape(Capsule())
     }
@@ -627,7 +627,7 @@ private struct RsvpButton: View {
                 .foregroundStyle(isActive ? .white : Color.yaplyPrimary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 9)
-                .background(isActive ? activeColor : Color.white)
+                .background(isActive ? activeColor : Color.yaplySurface)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(isActive ? activeColor : Color.yaplyBorder))
         }
