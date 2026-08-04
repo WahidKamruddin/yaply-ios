@@ -3,7 +3,12 @@ import SwiftUI
 struct ConversationDetailView: View {
     let conversationId: UUID
     let currentUserId: UUID
+    var members: [MemberSummary] = []
     var initialTab: String = "reminders"
+
+    private var isCurrentUserAdmin: Bool {
+        members.first { $0.userId == currentUserId }?.isAdmin ?? false
+    }
 
     @State private var selectedTab: String = "reminders"
     @Environment(\.dismiss) private var dismiss
@@ -51,7 +56,7 @@ struct ConversationDetailView: View {
             }
             moreMenu
         }
-        .background(Color.white)
+        .background(Color.yaplySurface)
         .overlay(alignment: .bottom) { Divider() }
     }
 
@@ -106,19 +111,19 @@ struct ConversationDetailView: View {
     private var contentView: some View {
         switch selectedTab {
         case "tasks":
-            TaskListView(conversationId: conversationId, currentUserId: currentUserId)
+            TaskListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
         case "notes":
-            NoteListView(conversationId: conversationId, currentUserId: currentUserId)
+            NoteListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
         case "reminders":
-            ReminderListView(conversationId: conversationId, currentUserId: currentUserId)
+            ReminderListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
         case "events":
-            EventListView(conversationId: conversationId, currentUserId: currentUserId)
+            EventListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
         case "albums":
-            AlbumListView(conversationId: conversationId, currentUserId: currentUserId)
+            AlbumListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
         case "budgets":
-            BudgetListView(conversationId: conversationId, currentUserId: currentUserId)
+            BudgetListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
         default:
-            ReminderListView(conversationId: conversationId, currentUserId: currentUserId)
+            ReminderListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
         }
     }
 }

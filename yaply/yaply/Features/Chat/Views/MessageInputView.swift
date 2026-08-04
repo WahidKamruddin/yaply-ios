@@ -53,7 +53,7 @@ struct MessageInputView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
-                .background(Color(red: 0.953, green: 0.969, blue: 1.0))
+                .background(Color.yaplyTint)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
@@ -82,20 +82,10 @@ struct MessageInputView: View {
                             }
                             if !new.isEmpty { onTyping?() } else { onStopTyping?() }
                         }
-
-                    Button(action: onAttachment) {
-                        Text("GIF")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(Color.yaplySecondary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.yaplyBorder))
-                    }
-                    .disabled(disabled)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(Color.white)
+                .background(Color.yaplySurface)
                 .clipShape(RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.yaplyBorder))
 
@@ -115,7 +105,7 @@ struct MessageInputView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(Color.white)
+            .background(Color.yaplySurface)
             .overlay(Rectangle().fill(Color.yaplyBorder).frame(height: 1), alignment: .top)
         }
     }

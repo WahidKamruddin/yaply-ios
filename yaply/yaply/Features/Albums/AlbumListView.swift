@@ -3,12 +3,14 @@ import SwiftUI
 struct AlbumListView: View {
     let conversationId: UUID
     let currentUserId: UUID
+    var isCurrentUserAdmin: Bool = false
 
     @State private var albums: [YaplyAlbum] = []
     @State private var isLoading = false
     @State private var showCreate = false
     @State private var selectedAlbum: YaplyAlbum?
     @State private var newName = ""
+    @State private var albumToDelete: YaplyAlbum?
 
     private let repo = AlbumRepository()
 
@@ -23,13 +25,7 @@ struct AlbumListView: View {
                     Spacer()
                 } else if albums.isEmpty {
                     Spacer()
-                    VStack(spacing: 8) {
-                        Image(systemName: "photo.on.rectangle.angled")
-                            .font(.system(size: 40))
-                            .foregroundStyle(Color.yaplySecondary)
-                        Text("No albums yet")
-                            .foregroundStyle(Color.yaplySecondary)
-                    }
+                    EmptyStateView(icon: "photo.on.rectangle.angled", title: "No albums yet")
                     Spacer()
                 } else {
                     List {
@@ -38,9 +34,40 @@ struct AlbumListView: View {
                                 AlbumRowView(album: album)
                             }
                             .buttonStyle(.plain)
+                            .yaplyCardStyle()
+                            .yaplyCardRowContainer()
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                // Additive to the gallery sheet's own delete entry point —
+                                // gives Albums the same trailing-swipe delete affordance as
+                                // every other list, using the identical creator/admin/lock
+                                // gating the gallery sheet already applies.
+                                let canDelete = album.createdBy == currentUserId || isCurrentUserAdmin
+                                let effectiveCanDelete = canDelete && (!album.locked || isCurrentUserAdmin)
+                                Button(role: effectiveCanDelete ? .destructive : .none) {
+                                    if effectiveCanDelete { albumToDelete = album }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                                .tint(effectiveCanDelete ? Color.yaplyDanger : Color(UIColor.systemGray4))
+                            }
+                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                if isCurrentUserAdmin {
+                                    Button {
+                                        Task {
+                                            try? await repo.setLocked(id: album.id, locked: !album.locked)
+                                            await load()
+                                        }
+                                    } label: {
+                                        Label(album.locked ? "Unlock" : "Lock",
+                                              systemImage: album.locked ? "lock.open" : "lock")
+                                    }
+                                    .tint(.orange)
+                                }
+                            }
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
         }
@@ -66,9 +93,29 @@ struct AlbumListView: View {
             AlbumGallerySheet(
                 album: album,
                 currentUserId: currentUserId,
+                isCurrentUserAdmin: isCurrentUserAdmin,
                 repo: repo,
                 onDeleted: { Task { await load() } }
             )
+        }
+        .alert(
+            "Delete Album",
+            isPresented: Binding(
+                get: { albumToDelete != nil },
+                set: { if !$0 { albumToDelete = nil } }
+            ),
+            presenting: albumToDelete
+        ) { album in
+            Button("Delete", role: .destructive) {
+                albumToDelete = nil
+                Task {
+                    try? await repo.deleteAlbum(id: album.id)
+                    albums.removeAll { $0.id == album.id }
+                }
+            }
+            Button("Cancel", role: .cancel) { albumToDelete = nil }
+        } message: { album in
+            Text("\"\(album.name)\" and all its photos will be permanently deleted. This cannot be undone.")
         }
     }
 
@@ -126,9 +173,16 @@ private struct AlbumRowView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(album.name)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Color.yaplyPrimary)
+                HStack(spacing: 4) {
+                    if album.locked {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.orange)
+                    }
+                    Text(album.name)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color.yaplyPrimary)
+                }
                 Text("by \(album.creator?.name ?? "Unknown") · \(album.createdAt.formatted(.dateTime.month(.abbreviated).day().year()))")
                     .font(.caption)
                     .foregroundStyle(Color.yaplySecondary)
@@ -138,7 +192,7 @@ private struct AlbumRowView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Color.yaplySecondary)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
     }
 
     private var albumPlaceholder: some View {
@@ -158,6 +212,7 @@ private struct AlbumRowView: View {
 private struct AlbumGallerySheet: View {
     let album: YaplyAlbum
     let currentUserId: UUID
+    var isCurrentUserAdmin: Bool = false
     let repo: AlbumRepository
     let onDeleted: () -> Void
 
@@ -171,6 +226,8 @@ private struct AlbumGallerySheet: View {
 
     private let eventRepo = EventRepository()
     private var isCreator: Bool { album.createdBy == currentUserId }
+    private var canDelete: Bool { isCreator || isCurrentUserAdmin }
+    private var effectiveCanDelete: Bool { canDelete && (!album.locked || isCurrentUserAdmin) }
 
     let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
 
@@ -181,13 +238,7 @@ private struct AlbumGallerySheet: View {
                 if isLoading {
                     ProgressView().tint(Color.yaplyAccent)
                 } else if media.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "photo")
-                            .font(.system(size: 40))
-                            .foregroundStyle(Color.yaplySecondary)
-                        Text("No photos yet")
-                            .foregroundStyle(Color.yaplySecondary)
-                    }
+                    EmptyStateView(icon: "photo", title: "No photos yet")
                 } else {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 2) {
@@ -239,12 +290,12 @@ private struct AlbumGallerySheet: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 14) {
                         Button {
-                            if isCreator { showDeleteConfirm = true }
+                            if effectiveCanDelete { showDeleteConfirm = true }
                         } label: {
                             Image(systemName: "trash")
                         }
-                        .foregroundStyle(isCreator ? Color.red : Color(UIColor.systemGray4))
-                        .disabled(!isCreator)
+                        .foregroundStyle(effectiveCanDelete ? Color.yaplyDanger : Color(UIColor.systemGray4))
+                        .disabled(!effectiveCanDelete)
 
                         Button("Done") { dismiss() }
                             .foregroundStyle(Color.yaplyAccent)
@@ -269,13 +320,14 @@ private struct AlbumGallerySheet: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("\"\(album.name)\" and all its photos will be permanently deleted.")
+            Text("\"\(album.name)\" and all its photos will be permanently deleted. This cannot be undone.")
         }
         .alert("Unlink Album", isPresented: $showUnlinkConfirm) {
             Button("Unlink", role: .destructive) {
                 Task {
                     try? await repo.unlinkFromEvent(albumId: album.id)
                     onDeleted()
+                    dismiss()
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -319,13 +371,11 @@ struct EventLinkPickerSheet: View {
                             HStack(spacing: 10) {
                                 ZStack {
                                     RoundedRectangle(cornerRadius: 6)
-                                        .fill(event.isPlanning
-                                              ? Color(red: 0.929, green: 0.945, blue: 0.980)
-                                              : Color(red: 0.9, green: 0.97, blue: 0.9))
+                                        .fill(event.isPlanning ? Color.yaplyBackground : Color.yaplyConfirmedGreen)
                                         .frame(width: 28, height: 28)
                                     Image(systemName: event.isPlanning ? "map" : "calendar")
                                         .font(.system(size: 12))
-                                        .foregroundStyle(event.isPlanning ? Color.yaplyAccent : Color.green)
+                                        .foregroundStyle(event.isPlanning ? Color.yaplyAccent : Color.yaplyMint)
                                 }
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(event.name)
@@ -333,11 +383,11 @@ struct EventLinkPickerSheet: View {
                                         .foregroundStyle(Color.yaplyPrimary)
                                     if let starts = event.startsAt {
                                         Text(starts.formatted(.dateTime.month(.abbreviated).day()))
-                                            .font(.system(size: 11))
+                                            .font(.caption)
                                             .foregroundStyle(Color.yaplySecondary)
                                     } else {
                                         Text("Planning")
-                                            .font(.system(size: 11))
+                                            .font(.caption)
                                             .foregroundStyle(Color.yaplySecondary)
                                     }
                                 }

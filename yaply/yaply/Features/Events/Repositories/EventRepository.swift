@@ -72,12 +72,13 @@ struct YaplyEvent: Codable, Identifiable {
     var status: String       // "planning" | "confirmed"
     var startsAt: Date?
     var endsAt: Date?
+    var locked: Bool
     let createdAt: Date
     var updatedAt: Date
     var creator: CreatorProfile?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, description, location, status, creator
+        case id, name, description, location, status, creator, locked
         case conversationId = "conversation_id"
         case createdBy      = "created_by"
         case startsAt       = "starts_at"
@@ -91,6 +92,19 @@ struct YaplyEvent: Codable, Identifiable {
 }
 
 final class EventRepository {
+    // Cross-conversation feed for the Home dashboard — intentionally
+    // unfiltered by conversation_id; RLS already scopes rows to conversations
+    // the caller belongs to, mirroring useDashboardEvents on web.
+    func fetchAllRecent(limit: Int = 20) async throws -> [YaplyEvent] {
+        return try await supabase
+            .from("events")
+            .select("*, creator:profiles!events_created_by_fkey(display_name, username)")
+            .order("created_at", ascending: false)
+            .limit(limit)
+            .execute()
+            .value
+    }
+
     func fetchEvents(conversationId: UUID) async throws -> [YaplyEvent] {
         return try await supabase
             .from("events")
@@ -144,6 +158,24 @@ final class EventRepository {
             .from("events")
             .delete()
             .eq("id", value: id.uuidString)
+            .execute()
+    }
+
+    func setLocked(id: UUID, locked: Bool) async throws {
+        struct Update: Encodable { let locked: Bool; let updated_at: String }
+        try await supabase
+            .from("events")
+            .update(Update(locked: locked, updated_at: Date().iso8601))
+            .eq("id", value: id.uuidString)
+            .execute()
+    }
+
+    func updateStartsAt(eventId: UUID, startsAt: Date) async throws {
+        struct Update: Encodable { let starts_at: String; let updated_at: String }
+        try await supabase
+            .from("events")
+            .update(Update(starts_at: startsAt.iso8601, updated_at: Date().iso8601))
+            .eq("id", value: eventId.uuidString)
             .execute()
     }
 

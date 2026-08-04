@@ -73,6 +73,11 @@ final class MessageRepository {
             .value
     }
 
+    // Plain insert — ONLY for phase-1 fallback (no member has a registered device
+    // yet) and media/sticker/gif/system rows, which are never encrypted
+    // (`content: "", iv: nil, enc_v: nil`). Encrypted text sends must go through
+    // `sendMessageWithEnvelopes` instead, which is the only path allowed to write
+    // `enc_v = 2`.
     func sendMessage(_ params: SendMessageParams) async throws -> DbMessage {
         return try await supabase
             .from("messages")
@@ -83,6 +88,7 @@ final class MessageRepository {
                 sender_id,
                 content,
                 iv,
+                enc_v,
                 type,
                 media_url,
                 media_mime,
@@ -95,6 +101,65 @@ final class MessageRepository {
             .single()
             .execute()
             .value
+    }
+
+    // Unfiltered by last_active_at — used ONLY to decide the phase-1 fallback
+    // (does this member have any registered device at all, ever). Must NOT be used
+    // to pick which devices receive envelopes; a member with a merely stale device
+    // should have that device excluded from the send, not trigger a fallback for
+    // the whole message.
+    func fetchUserIdsWithAnyDevice(userIds: [UUID]) async throws -> Set<UUID> {
+        guard !userIds.isEmpty else { return [] }
+        struct Row: Decodable {
+            let userId: UUID
+            enum CodingKeys: String, CodingKey { case userId = "user_id" }
+        }
+        let rows: [Row] = try await supabase
+            .from("devices")
+            .select("user_id")
+            .in("user_id", values: userIds.map(\.uuidString))
+            .execute()
+            .value
+        return Set(rows.map(\.userId))
+    }
+
+    // Every active device (last_active_at within 90 days) of every given user,
+    // including the sender's own — callers must union the sender's id into
+    // `userIds` themselves so their own other devices can read their sent message.
+    func fetchActiveDeviceRows(userIds: [UUID]) async throws -> [DeviceRow] {
+        guard !userIds.isEmpty else { return [] }
+        let cutoff = Date().addingTimeInterval(-90 * 24 * 60 * 60).iso8601
+        return try await supabase
+            .from("devices")
+            .select("user_id, device_id, identity_key, key_fingerprint, last_active_at")
+            .in("user_id", values: userIds.map(\.uuidString))
+            .gt("last_active_at", value: cutoff)
+            .execute()
+            .value
+    }
+
+    // The only way to insert an encrypted (enc_v=2) message — writes the message
+    // row and all `message_envelopes` rows atomically; rejects an empty envelope
+    // array or a NULL iv server-side.
+    func sendMessageWithEnvelopes(_ params: SendMessageWithEnvelopesParams) async throws -> DbMessage {
+        return try await supabase
+            .rpc("send_message_with_envelopes", params: params)
+            .single()
+            .execute()
+            .value
+    }
+
+    // Fetches this device's envelope for a message by its key fingerprint. No row
+    // is a legitimate, permanent state (sealed before this device existed).
+    func fetchEnvelope(messageId: UUID, recipientFp: String) async throws -> MessageEnvelope? {
+        let rows: [MessageEnvelope] = try await supabase
+            .from("message_envelopes")
+            .select("message_id, recipient_user_id, recipient_fp, eph_pub, key_iv, wrapped_key")
+            .eq("message_id", value: messageId.uuidString)
+            .eq("recipient_fp", value: recipientFp)
+            .execute()
+            .value
+        return rows.first
     }
 
     func softDelete(messageId: UUID) async throws {

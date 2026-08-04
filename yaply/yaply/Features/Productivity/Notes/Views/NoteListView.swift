@@ -3,6 +3,7 @@ import SwiftUI
 struct NoteListView: View {
     let conversationId: UUID
     let currentUserId: UUID
+    var isCurrentUserAdmin: Bool = false
 
     @State private var notes: [YaplyNote] = []
     @State private var isLoading = false
@@ -24,13 +25,7 @@ struct NoteListView: View {
                     Spacer()
                 } else if notes.isEmpty {
                     Spacer()
-                    VStack(spacing: 8) {
-                        Image(systemName: "note.text")
-                            .font(.system(size: 40))
-                            .foregroundStyle(Color.yaplySecondary)
-                        Text("No notes yet")
-                            .foregroundStyle(Color.yaplySecondary)
-                    }
+                    EmptyStateView(icon: "note.text", title: "No notes yet")
                     Spacer()
                 } else {
                     List {
@@ -38,25 +33,43 @@ struct NoteListView: View {
                             NoteRowView(
                                 note: note,
                                 isExpanded: expandedId == note.id,
+                                isCurrentUserAdmin: isCurrentUserAdmin,
                                 onTap: {
                                     withAnimation(.easeInOut(duration: 0.2)) {
                                         expandedId = expandedId == note.id ? nil : note.id
                                     }
                                 }
                             )
-                            .listRowBackground(Color.white)
+                            .yaplyCardStyle()
+                            .yaplyCardRowContainer()
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                let isCreator = note.userId == currentUserId
-                                Button(role: isCreator ? .destructive : .none) {
-                                    if isCreator { noteToDelete = note }
+                                let canDelete = note.userId == currentUserId || isCurrentUserAdmin
+                                let effectiveCanDelete = canDelete && (!note.locked || isCurrentUserAdmin)
+                                Button(role: effectiveCanDelete ? .destructive : .none) {
+                                    if effectiveCanDelete { noteToDelete = note }
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
-                                .tint(isCreator ? .red : Color(UIColor.systemGray4))
+                                .tint(effectiveCanDelete ? Color.yaplyDanger : Color(UIColor.systemGray4))
+                            }
+                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                if isCurrentUserAdmin {
+                                    Button {
+                                        Task {
+                                            try? await repo.setLocked(id: note.id, locked: !note.locked)
+                                            await load()
+                                        }
+                                    } label: {
+                                        Label(note.locked ? "Unlock" : "Lock",
+                                              systemImage: note.locked ? "lock.open" : "lock")
+                                    }
+                                    .tint(.orange)
+                                }
                             }
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
         }
@@ -92,7 +105,7 @@ struct NoteListView: View {
             }
             Button("Cancel", role: .cancel) { noteToDelete = nil }
         } message: {
-            Text("\"\(noteToDelete?.title ?? "")\" will be permanently deleted.")
+            Text("\"\(noteToDelete?.title ?? "")\" will be permanently deleted. This cannot be undone.")
         }
     }
 
@@ -132,18 +145,24 @@ struct NoteListView: View {
 private struct NoteRowView: View {
     let note: YaplyNote
     let isExpanded: Bool
+    let isCurrentUserAdmin: Bool
     let onTap: () -> Void
 
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
+                    if note.locked {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.orange)
+                    }
                     Text(note.title)
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(Color.yaplyPrimary)
                     Spacer()
                     Text("by \(note.creator?.name ?? "Unknown")")
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(Color.yaplySecondary.opacity(0.7))
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 11))
@@ -160,6 +179,11 @@ private struct NoteRowView: View {
                         .foregroundStyle(Color.yaplySecondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                }
+                if note.locked && !isCurrentUserAdmin {
+                    Label("Locked by admin", systemImage: "lock.fill")
+                        .font(.caption2)
+                        .foregroundStyle(Color.orange.opacity(0.8))
                 }
             }
             .padding(.vertical, 4)

@@ -1,5 +1,6 @@
 import SwiftUI
 import Auth
+import Supabase
 import UIKit
 
 @main
@@ -19,6 +20,7 @@ struct YaplyApp: App {
                 .environment(router)
                 .environment(notifications)
                 .task { appDelegate.pushService = pushService }
+                .onOpenURL { url in supabase.auth.handle(url) }
         }
         .onChange(of: scenePhase) { _, phase in
             guard let userId = authService.currentUser?.id else { return }

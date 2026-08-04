@@ -42,7 +42,7 @@ struct ThreadView: View {
                                         onDelete: { _ in }
                                     )
                                 }
-                                .background(Color.white)
+                                .background(Color.yaplySurface)
                                 .overlay(Divider(), alignment: .bottom)
                                 .padding(.bottom, 8)
 

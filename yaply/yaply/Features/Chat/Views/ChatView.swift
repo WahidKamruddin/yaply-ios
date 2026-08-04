@@ -5,7 +5,6 @@ struct ChatView: View {
     let currentUserId: UUID
     let currentUsername: String
     let conversationName: String
-    let otherMember: MemberSummary?
 
     @State private var vm: ChatViewModel
     @State private var messageText = ""
@@ -19,23 +18,35 @@ struct ChatView: View {
     @State private var swipeOffset: CGFloat = 0
     @State private var showDetail = false
     @State private var detailTab: String = "tasks"
+    @State private var distFromBottom: CGFloat = 0
+    @State private var viewportHeight: CGFloat = 1
+    @State private var newMsgCount = 0
     @State private var commandFeedback: String?
+
+    private var isNearBottom: Bool { distFromBottom <= viewportHeight }
+    private var showScrollButton: Bool { distFromBottom > viewportHeight }
     @State private var feedbackDismissTask: Task<Void, Never>?
     @State private var showHelp = false
     @Environment(AppRouter.self) private var router
 
     private let convRepository = ConversationRepository()
 
-    init(conversationId: UUID, currentUserId: UUID, currentUsername: String, conversationName: String, otherMember: MemberSummary?) {
+    init(conversationId: UUID, currentUserId: UUID, currentUsername: String, conversationName: String) {
         self.conversationId = conversationId
         self.currentUserId = currentUserId
         self.currentUsername = currentUsername
         self.conversationName = conversationName
-        self.otherMember = otherMember
         _vm = State(initialValue: ChatViewModel(conversationId: conversationId, currentUserId: currentUserId))
     }
 
-    private var isOnline: Bool { otherMember?.profile.isOnline ?? false }
+    private var currentOtherMember: MemberSummary? {
+        vm.conversationMembers.first(where: { $0.userId != currentUserId })
+    }
+    private var isOnline: Bool { currentOtherMember?.profile.isOnline ?? false }
+    private var displayName: String {
+        if vm.isGroupConversation { return vm.groupName ?? conversationName }
+        return currentOtherMember?.profile.name ?? conversationName
+    }
 
     private var displayMessages: [DecryptedMessage] {
         guard !searchQuery.isEmpty else { return vm.messages }
@@ -57,6 +68,7 @@ struct ChatView: View {
     }
 
     var body: some View {
+
         ZStack {
             Color.yaplyBackground.ignoresSafeArea()
 
@@ -76,7 +88,7 @@ struct ChatView: View {
                         }
                     }
                     .padding(9)
-                    .background(Color.white)
+                    .background(Color.yaplyTint)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.yaplyBorder))
                     .padding(.horizontal, 12)
@@ -120,26 +132,81 @@ struct ChatView: View {
                                     .background(highlightedId == msg.id ? Color.yaplyAccent.opacity(0.12) : Color.clear)
                                     .clipShape(RoundedRectangle(cornerRadius: 10))
                                     .animation(.easeInOut(duration: 0.3), value: highlightedId)
+                                    .transition(.asymmetric(
+                                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                                        removal: .opacity
+                                    ))
                                 }
                             }
 
                             if !vm.typingUsernames.isEmpty {
-                                HStack(spacing: 6) {
-                                    TypingDotsView()
-                                    Text(typingLabel)
-                                        .font(.caption)
-                                        .foregroundStyle(Color.yaplySecondary)
+                                let typingMember = vm.conversationMembers.first(where: { $0.profile.username == vm.typingUsernames.first })
+                                HStack(alignment: .bottom, spacing: 8) {
+                                    AvatarView(
+                                        url: typingMember?.profile.avatarUrl,
+                                        name: vm.typingUsernames.first ?? "?",
+                                        size: 28
+                                    )
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("placeholder")
+                                            .font(.caption)
+                                            .fontWeight(.medium)
+                                            .hidden()
+                                        TypingBubbleView()
+                                    }
                                     Spacer()
                                 }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 6)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 2)
                                 .id("typing")
                             }
 
-                            Color.clear.frame(height: 1).id("bottom")
+                            Color.clear.frame(height: 10).id("bottom")
                         }
                         .padding(.vertical, 8)
                     }
+                    .onScrollGeometryChange(for: CGPoint.self) { geo in
+                        CGPoint(
+                            x: geo.contentSize.height - (geo.contentOffset.y + geo.containerSize.height),
+                            y: geo.containerSize.height
+                        )
+                    } action: { _, new in
+                        distFromBottom = max(0, new.x)
+                        viewportHeight = max(1, new.y)
+                        if isNearBottom { newMsgCount = 0 }
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        if showScrollButton {
+                            ZStack(alignment: .topTrailing) {
+                                Button {
+                                    newMsgCount = 0
+                                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                                } label: {
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .frame(width: 36, height: 36)
+                                        .background(Color.yaplyAccent)
+                                        .clipShape(Circle())
+                                        .shadow(color: Color.yaplyAccent.opacity(0.35), radius: 6, y: 2)
+                                }
+                                if newMsgCount > 0 {
+                                    Text(newMsgCount > 99 ? "99+" : "\(newMsgCount)")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 4)
+                                        .frame(minWidth: 18, minHeight: 18)
+                                        .background(Color.yaplyDanger)
+                                        .clipShape(Capsule())
+                                        .offset(x: 6, y: -6)
+                                }
+                            }
+                            .padding(.trailing, 16)
+                            .padding(.bottom, 10)
+                            .transition(.scale.combined(with: .opacity))
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.2), value: showScrollButton)
                     .simultaneousGesture(
                         DragGesture(minimumDistance: 10)
                             .onChanged { value in
@@ -155,10 +222,12 @@ struct ChatView: View {
                             }
                     )
                     .onChange(of: vm.messages.count) { _, _ in
-                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                        handleMessageCountChange(proxy: proxy)
                     }
                     .onChange(of: vm.typingUsernames.isEmpty) { _, isEmpty in
-                        if !isEmpty { withAnimation { proxy.scrollTo("typing", anchor: .bottom) } }
+                        if !isEmpty && isNearBottom {
+                            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                        }
                     }
                     .onChange(of: scrollToId) { _, id in
                         guard let id else { return }
@@ -172,6 +241,7 @@ struct ChatView: View {
                     }
                     .task {
                         vm.currentUsername = currentUsername
+                        newMsgCount = 0
                         await vm.onAppear()
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
@@ -195,7 +265,7 @@ struct ChatView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Color(red: 0.953, green: 0.969, blue: 1.0))
+                    .background(Color.yaplyTint)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yaplyBorder.opacity(0.8)))
                     .padding(.horizontal, 12)
@@ -225,18 +295,30 @@ struct ChatView: View {
                 )
             }
         }
-        .navigationTitle(conversationName)
+        .navigationTitle(displayName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 1) {
-                    Text(conversationName)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.yaplyPrimary)
-                    if otherMember != nil {
-                        Text(isOnline ? "Online" : "Offline")
-                            .font(.caption2)
-                            .foregroundStyle(isOnline ? Color.green : Color.yaplySecondary)
+                HStack(spacing: 8) {
+                    ZStack(alignment: .bottomTrailing) {
+                        AvatarView(
+                            url: vm.isGroupConversation ? nil : currentOtherMember?.profile.avatarUrl,
+                            name: displayName,
+                            size: 36
+                        )
+                        if !vm.isGroupConversation && currentOtherMember != nil {
+                            PresenceDotView(isOnline: isOnline, borderColor: .yaplySurface, size: 9)
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(displayName)
+                            .font(.display(16, weight: .semibold))
+                            .foregroundStyle(Color.yaplyPrimary)
+                        if !vm.isGroupConversation && currentOtherMember != nil {
+                            Text(isOnline ? "Online" : "Offline")
+                                .font(.caption2)
+                                .foregroundStyle(isOnline ? Color.yaplyOnline : Color.yaplySecondary)
+                        }
                     }
                 }
             }
@@ -247,16 +329,22 @@ struct ChatView: View {
                         if !searchIsActive { searchQuery = "" }
                     } label: {
                         Image(systemName: searchIsActive ? "xmark" : "magnifyingglass")
-                            .font(.system(size: 16))
-                            .foregroundStyle(Color.yaplyAccent)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(searchIsActive ? .white : Color.yaplyAccent)
+                            .frame(width: 30, height: 30)
+                            .background(searchIsActive ? Color.yaplyAccent : Color.clear)
+                            .clipShape(Circle())
                     }
                     Button {
                         detailTab = "tasks"
                         showDetail = true
                     } label: {
                         Image(systemName: "list.bullet.rectangle.portrait")
-                            .font(.system(size: 16))
-                            .foregroundStyle(Color.yaplyAccent)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(showDetail ? .white : Color.yaplyAccent)
+                            .frame(width: 30, height: 30)
+                            .background(showDetail ? Color.yaplyAccent : Color.clear)
+                            .clipShape(Circle())
                     }
                     if vm.isGroupConversation {
                         Button { showGroupInfo = true } label: {
@@ -266,8 +354,8 @@ struct ChatView: View {
                         }
                     } else {
                         AvatarView(
-                            url: otherMember?.profile.avatarUrl,
-                            name: conversationName,
+                            url: currentOtherMember?.profile.avatarUrl,
+                            name: displayName,
                             size: 32
                         )
                     }
@@ -297,13 +385,15 @@ struct ChatView: View {
                 conversationId: conversationId,
                 conversationName: conversationName,
                 currentUserId: currentUserId,
-                onRefresh: { await vm.loadConversationInfo() }
+                onRefresh: { await vm.loadConversationInfo() },
+                onDeleted: { router.pop() }
             )
         }
         .sheet(isPresented: $showDetail) {
             ConversationDetailView(
                 conversationId: conversationId,
                 currentUserId: currentUserId,
+                members: vm.conversationMembers,
                 initialTab: detailTab
             )
         }
@@ -331,10 +421,16 @@ struct ChatView: View {
         }
     }
 
-    private var typingLabel: String {
-        let names = vm.typingUsernames
-        if names.count == 1 { return "\(names[0]) is typing…" }
-        return "\(names.dropLast().joined(separator: ", ")) and \(names.last!) are typing…"
+
+    private func handleMessageCountChange(proxy: ScrollViewProxy) {
+        guard let last = vm.messages.last else { return }
+        if last.senderId == currentUserId || isNearBottom {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.65)) {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+        } else {
+            newMsgCount += 1
+        }
     }
 
     private func groupByDate(_ messages: [DecryptedMessage]) -> [(date: Date, messages: [DecryptedMessage])] {
@@ -437,22 +533,37 @@ struct ChatView: View {
     }
 }
 
-private struct TypingDotsView: View {
-    @State private var phase = 0
+private struct TypingBubbleView: View {
+    @State private var animating = false
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 6) {
             ForEach(0..<3, id: \.self) { i in
                 Circle()
                     .fill(Color.yaplySecondary)
-                    .frame(width: 6, height: 6)
-                    .scaleEffect(phase == i ? 1.3 : 0.8)
-                    .animation(.easeInOut(duration: 0.4).repeatForever().delay(Double(i) * 0.15), value: phase)
+                    .frame(width: 8, height: 8)
+                    .offset(y: animating ? -5 : 0)
+                    .animation(
+                        .easeInOut(duration: 0.5)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(i) * 0.18),
+                        value: animating
+                    )
             }
         }
-        .onAppear {
-            withAnimation { phase = (phase + 1) % 3 }
-        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.yaplySurface)
+        .clipShape(UnevenRoundedRectangle(cornerRadii: .init(
+            topLeading: 18, bottomLeading: 4, bottomTrailing: 18, topTrailing: 18
+        )))
+        .overlay(
+            UnevenRoundedRectangle(cornerRadii: .init(
+                topLeading: 18, bottomLeading: 4, bottomTrailing: 18, topTrailing: 18
+            ))
+            .stroke(Color.yaplyBorderSoft, lineWidth: 1)
+        )
+        .onAppear { animating = true }
     }
 }
 

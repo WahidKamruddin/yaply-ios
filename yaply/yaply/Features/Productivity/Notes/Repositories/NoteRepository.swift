@@ -10,12 +10,13 @@ struct YaplyNote: Codable, Identifiable {
     let userId: UUID
     var title: String
     var content: String
+    var locked: Bool
     let createdAt: Date
     var updatedAt: Date
     var creator: CreatorProfile?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, content, creator
+        case id, title, content, creator, locked
         case conversationId = "conversation_id"
         case userId         = "user_id"
         case createdAt      = "created_at"
@@ -66,6 +67,15 @@ final class NoteRepository {
         try await supabase
             .from("notes")
             .delete()
+            .eq("id", value: id.uuidString)
+            .execute()
+    }
+
+    func setLocked(id: UUID, locked: Bool) async throws {
+        struct Update: Encodable { let locked: Bool; let updated_at: String }
+        try await supabase
+            .from("notes")
+            .update(Update(locked: locked, updated_at: Date().iso8601))
             .eq("id", value: id.uuidString)
             .execute()
     }

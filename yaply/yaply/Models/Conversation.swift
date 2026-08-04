@@ -69,7 +69,7 @@ struct ConversationListItem: Identifiable, Hashable {
 struct MemberSummary: Identifiable, Hashable {
     var id: UUID { userId }
     let userId: UUID
-    let profile: Profile
+    var profile: Profile
     var isAdmin: Bool
     var isMuted: Bool
     var lastReadAt: Date?

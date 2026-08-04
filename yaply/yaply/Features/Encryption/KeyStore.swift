@@ -5,9 +5,13 @@ import CryptoKit
 // Keychain-backed key storage. Mirrors packages/crypto/src/keyStore.ts.
 //
 // IndexedDB → Keychain mapping:
-//   STORE_IDENTITY "pub"  → "yaply.identity.public"   (x963 bytes, 65 bytes)
-//   STORE_IDENTITY "priv" → "yaply.identity.private"  (raw scalar, 32 bytes)
-//   STORE_DERIVED  convId → "yaply.derived.<UUID>"    (raw AES key, 32 bytes)
+//   STORE_IDENTITY "pub"       → "yaply.identity.public"    (x963 bytes, 65 bytes)
+//   STORE_IDENTITY "priv"      → "yaply.identity.private"   (raw scalar, 32 bytes)
+//   STORE_IDENTITY deviceId:<u> → "yaply.deviceId.<UUID>"   (this install's device_id)
+//
+// v2: there is no per-conversation derived key anymore — every message is sealed
+// with a fresh per-message key wrapped per recipient device (see EncryptionService
+// wrapKey/unwrapKey), so the old STORE_DERIVED slot is retired.
 //
 // Access control: private keys use afterFirstUnlockThisDeviceOnly — unavailable
 // before first unlock and excluded from iCloud backup.
@@ -15,7 +19,7 @@ enum KeyStore {
 
     private static let identityPrivate  = "yaply.identity.private"
     private static let identityPublic   = "yaply.identity.public"
-    private static let derivedPrefix    = "yaply.derived."
+    private static let deviceIdPrefix   = "yaply.deviceId."
 
     // MARK: — Identity keypair
 
@@ -42,22 +46,23 @@ enum KeyStore {
         return try P256.KeyAgreement.PublicKey(x963Representation: pubData)
     }
 
-    // MARK: — Derived (shared) keys per conversation
+    // MARK: — Per-install device id (v2 — random per install, never hardcoded to 1)
 
-    static func storeDerivedKey(_ key: SymmetricKey, forConversation id: UUID) throws {
-        let data = key.withUnsafeBytes { Data($0) }
+    static func storeDeviceId(_ id: Int, forUser userId: UUID) throws {
         try KeychainService.save(
-            key: derivedPrefix + id.uuidString,
-            data: data,
+            key: deviceIdPrefix + userId.uuidString,
+            data: Data(String(id).utf8),
             accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         )
     }
 
-    static func loadDerivedKey(forConversation id: UUID) throws -> SymmetricKey? {
-        guard let data = try KeychainService.load(key: derivedPrefix + id.uuidString) else {
-            return nil
-        }
-        return SymmetricKey(data: data)
+    static func loadDeviceId(forUser userId: UUID) throws -> Int? {
+        guard
+            let data = try KeychainService.load(key: deviceIdPrefix + userId.uuidString),
+            let str = String(data: data, encoding: .utf8),
+            let id = Int(str)
+        else { return nil }
+        return id
     }
 
     // MARK: — Clear (called on sign-out, mirrors clearAllKeys)
@@ -65,6 +70,6 @@ enum KeyStore {
     static func clearAllKeys() {
         KeychainService.delete(key: identityPrivate)
         KeychainService.delete(key: identityPublic)
-        KeychainService.deleteAll(prefix: derivedPrefix)
+        KeychainService.deleteAll(prefix: deviceIdPrefix)
     }
 }

@@ -10,11 +10,12 @@ struct YaplyBudget: Codable, Identifiable {
     var currency: String
     let createdBy: UUID
     let createdAt: Date
+    var locked: Bool
     var creator: CreatorProfile?
     var eventId: UUID?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, currency, creator
+        case id, name, currency, creator, locked
         case conversationId = "conversation_id"
         case totalAmount    = "total_amount"
         case createdBy      = "created_by"
@@ -103,6 +104,15 @@ final class BudgetRepository {
             .order("created_at", ascending: false)
             .execute()
             .value
+    }
+
+    func setLocked(id: UUID, locked: Bool) async throws {
+        struct Update: Encodable { let locked: Bool }
+        try await supabase
+            .from("budgets")
+            .update(Update(locked: locked))
+            .eq("id", value: id.uuidString)
+            .execute()
     }
 
     func addExpense(budgetId: UUID, paidBy: UUID, description: String, amount: Double, category: String = "other", splitBetween: [UUID] = []) async throws -> YaplyExpense {

@@ -2,6 +2,7 @@ import Supabase
 import CryptoKit
 import Foundation
 import Realtime
+import SwiftUI
 
 @Observable
 @MainActor
@@ -21,6 +22,7 @@ final class ChatViewModel {
     // Group info
     private(set) var conversationMembers: [MemberSummary] = []
     private(set) var isGroupConversation = false
+    private(set) var groupName: String?
 
     private var nextCursor: Date?
     private(set) var hasMore = false
@@ -37,8 +39,8 @@ final class ChatViewModel {
     private var isTyping = false
     private var typingDebounce: Task<Void, Never>?
 
-    // In-memory key caches — avoids Keychain reads on every message decrypt
-    private var derivedKeyCache: SymmetricKey?
+    // In-memory identity-key cache — avoids a Keychain read on every message decrypt.
+    // (No per-conversation derived-key cache under v2 — every message has its own key.)
     private var identityPrivKeyCache: P256.KeyAgreement.PrivateKey?
 
     init(conversationId: UUID, currentUserId: UUID) {
@@ -50,21 +52,14 @@ final class ChatViewModel {
 
     func onAppear() async {
         isLoading = true
-        await loadMessages()
-        await loadConversationInfo()
+        async let msgs: Void = loadMessages()
+        async let conv: Void = loadConversationInfo()
+        await msgs
+        await conv
         isLoading = false
-        await preDeriveSharedKey()
+        try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
         await markAndFetchReceipts()
         startRealtime()
-    }
-
-    private func preDeriveSharedKey() async {
-        guard derivedKeyCache == nil else { return }
-        // Use other member from loaded messages, falling back to conversationMembers
-        let otherUser = otherUserId(from: messages)
-            ?? conversationMembers.first(where: { $0.userId != currentUserId })?.userId
-        guard let otherUser else { return }
-        _ = try? await sharedKey(for: otherUser)
     }
 
     func onDisappear() {
@@ -91,8 +86,13 @@ final class ChatViewModel {
             let (raw, cursor) = try await repository.fetchMessages(conversationId: conversationId)
             nextCursor = cursor
             hasMore = cursor != nil
-            messages = await decryptAll(raw, otherUserId: otherUserId(from: raw))
-            await loadReactions()
+            let ids = raw.map(\.id)
+            async let decrypted = decryptAll(raw)
+            async let rawReactions = repository.fetchReactions(messageIds: ids)
+            messages = await decrypted
+            if let reactions = try? await rawReactions {
+                reactionsMap = buildReactionGroups(from: reactions)
+            }
         } catch {
             self.error = error.localizedDescription
         }
@@ -104,9 +104,14 @@ final class ChatViewModel {
             let (raw, newCursor) = try await repository.fetchMessages(conversationId: conversationId, cursor: cursor)
             nextCursor = newCursor
             hasMore = newCursor != nil
-            let older = await decryptAll(raw, otherUserId: otherUserId(from: raw))
+            let ids = raw.map(\.id)
+            async let decrypted = decryptAll(raw)
+            async let rawReactions = repository.fetchReactions(messageIds: ids)
+            let older = await decrypted
             messages = older + messages
-            await loadReactions()
+            if let reactions = try? await rawReactions {
+                reactionsMap = buildReactionGroups(from: reactions)
+            }
             await markAndFetchReceipts()
         } catch {
             self.error = error.localizedDescription
@@ -160,14 +165,15 @@ final class ChatViewModel {
         }
         struct ConvInfo: Decodable {
             let type: String
+            let name: String?
             let conversationMembers: [MemberRow]
             enum CodingKeys: String, CodingKey {
-                case type; case conversationMembers = "conversation_members"
+                case type, name; case conversationMembers = "conversation_members"
             }
         }
         guard let info: ConvInfo = try? await supabase
             .from("conversations")
-            .select("type, conversation_members(user_id, role, profiles(id, username, display_name, avatar_url, is_online, last_seen_at, created_at, updated_at))")
+            .select("type, name, conversation_members(user_id, role, profiles(id, username, display_name, avatar_url, is_online, last_seen_at, created_at, updated_at))")
             .eq("id", value: conversationId.uuidString)
             .single()
             .execute()
@@ -175,6 +181,7 @@ final class ChatViewModel {
         else { return }
 
         isGroupConversation = info.type == "group"
+        groupName = info.name
         conversationMembers = info.conversationMembers.compactMap { cm in
             guard let profile = cm.profiles else { return nil }
             return MemberSummary(
@@ -216,18 +223,31 @@ final class ChatViewModel {
         ))
         replyToMessage = nil
 
-        // Fall back to conversationMembers when no incoming messages exist yet
-        // (e.g., first message in a conversation), otherwise iOS sends phase-1 plaintext.
-        let otherUser = otherUserId(from: messages)
-            ?? conversationMembers.first(where: { $0.userId != currentUserId })?.userId
-        let (content, iv) = await encrypt(plaintext: text, otherUserId: otherUser)
-        let params = SendMessageParams(
-            conversationId: conversationId, senderId: currentUserId,
-            content: content, iv: iv, type: "text",
-            replyToId: capturedReplyTo?.id, threadId: capturedReplyTo?.threadId
-        )
         do {
-            let sent = try await repository.sendMessage(params)
+            // Registration is single-flight — safe to call even if already done.
+            try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
+
+            let sent: DbMessage
+            if let sealed = await EnvelopeEncryption.encryptForMembers(
+                plaintext: text, memberUserIds: memberIdsForEncryption(), repository: repository
+            ) {
+                let params = SendMessageWithEnvelopesParams(
+                    pConversationId: conversationId, pContent: sealed.content, pIv: sealed.iv,
+                    pEnvelopes: sealed.envelopes, pType: "text",
+                    pReplyToId: capturedReplyTo?.id, pThreadId: capturedReplyTo?.threadId,
+                    pMediaUrl: nil, pMediaMime: nil
+                )
+                sent = try await repository.sendMessageWithEnvelopes(params)
+            } else {
+                // Phase-1 fallback: some member has zero registered devices yet.
+                let params = SendMessageParams(
+                    conversationId: conversationId, senderId: currentUserId,
+                    content: Data(text.utf8).base64EncodedString(), iv: nil, type: "text",
+                    replyToId: capturedReplyTo?.id, threadId: capturedReplyTo?.threadId
+                )
+                sent = try await repository.sendMessage(params)
+            }
+
             // Realtime may have already inserted the real message before this returns
             if messages.contains(where: { $0.id == sent.id }) {
                 messages.removeAll { $0.id == tempId }
@@ -244,6 +264,18 @@ final class ChatViewModel {
             replyToMessage = capturedReplyTo
             self.error = error.localizedDescription
         }
+    }
+
+    // Every conversation member, including the sender — omitting the sender's own
+    // id would mean the sender's other devices (and this one, after a reload)
+    // can't read the message back, the original single-slot-era bug.
+    private func memberIdsForEncryption() -> [UUID] {
+        var ids = Set(conversationMembers.map(\.userId))
+        if ids.isEmpty, let other = otherUserId(from: messages) {
+            ids.insert(other)
+        }
+        ids.insert(currentUserId)
+        return Array(ids)
     }
 
     // MARK: - Send media
@@ -368,6 +400,7 @@ final class ChatViewModel {
             let reactionInserts = pg.postgresChange(InsertAction.self, schema: "public", table: "message_reactions")
             let reactionDeletes = pg.postgresChange(DeleteAction.self, schema: "public", table: "message_reactions")
             let readInserts = pg.postgresChange(InsertAction.self, schema: "public", table: "message_reads")
+            let profileUpdates = pg.postgresChange(UpdateAction.self, schema: "public", table: "profiles")
             try? await pg.subscribeWithError()
 
             let tc = supabase.channel("typing:\(conversationId.uuidString.lowercased())")
@@ -393,6 +426,7 @@ final class ChatViewModel {
                 group.addTask { for await _ in reactionInserts { await self.loadReactionsForCurrentMessages() } }
                 group.addTask { for await _ in reactionDeletes { await self.loadReactionsForCurrentMessages() } }
                 group.addTask { for await _ in readInserts { await self.fetchReadStatus() } }
+                group.addTask { for await event in profileUpdates { await self.handleProfileUpdate(event.record) } }
                 group.addTask { for await payload in typingStream { await self.handleTyping(payload) } }
             }
         }
@@ -478,27 +512,33 @@ final class ChatViewModel {
         let senderIdStr = record["sender_id"]?.stringValue
         let senderId = senderIdStr.flatMap(UUID.init(uuidString:))
         let iv = record["iv"]?.stringValue
+        let encV = record["enc_v"]?.intValue
 
         // Look up sender profile from already-loaded conversationMembers — no network needed
         let senderProfile = conversationMembers.first(where: { $0.userId == senderId })?.profile
 
-        var decryptedContent = content
-        if let sId = senderId, sId != currentUserId {
-            decryptedContent = await decryptContent(content, iv: iv, otherUserId: sId)
-        } else if iv == nil {
-            decryptedContent = EncryptionService.decryptLegacy(content) ?? content
-        }
+        let dbMsg = DbMessage(
+            id: id, conversationId: convId, senderId: senderId, content: content, iv: iv,
+            encV: encV, type: type, mediaUrl: record["media_url"]?.stringValue, mediaMime: nil,
+            replyToId: record["reply_to_id"]?.stringValue.flatMap(UUID.init(uuidString:)),
+            threadId: record["thread_id"]?.stringValue.flatMap(UUID.init(uuidString:)),
+            editedAt: record["edited_at"]?.stringValue.flatMap(Self.parseRealtimeDate),
+            deletedAt: record["deleted_at"]?.stringValue.flatMap(Self.parseRealtimeDate),
+            createdAt: createdAt, senderProfile: nil
+        )
+        let (decryptedContent, failed) = await decryptDbMessage(dbMsg)
 
         let msg = DecryptedMessage(
             id: id, conversationId: convId, senderId: senderId,
             content: decryptedContent, type: type,
             mediaUrl: record["media_url"]?.stringValue,
-            replyToId: record["reply_to_id"]?.stringValue.flatMap(UUID.init(uuidString:)),
-            threadId: record["thread_id"]?.stringValue.flatMap(UUID.init(uuidString:)),
-            editedAt: record["edited_at"]?.stringValue.flatMap(Self.parseRealtimeDate),
-            deletedAt: record["deleted_at"]?.stringValue.flatMap(Self.parseRealtimeDate),
+            replyToId: dbMsg.replyToId,
+            threadId: dbMsg.threadId,
+            editedAt: dbMsg.editedAt,
+            deletedAt: dbMsg.deletedAt,
             createdAt: createdAt,
-            senderProfile: senderProfile
+            senderProfile: senderProfile,
+            decryptFailed: failed
         )
         messages.append(msg)
         await markAndFetchReceipts()
@@ -520,8 +560,28 @@ final class ChatViewModel {
             id: m.id, conversationId: m.conversationId, senderId: m.senderId,
             content: m.content, type: m.type, mediaUrl: m.mediaUrl,
             replyToId: m.replyToId, threadId: m.threadId, editedAt: m.editedAt,
-            deletedAt: deletedAt, createdAt: m.createdAt, senderProfile: m.senderProfile
+            deletedAt: deletedAt, createdAt: m.createdAt, senderProfile: m.senderProfile,
+            decryptFailed: m.decryptFailed
         )
+    }
+
+    // Keeps the in-chat "Online"/"Offline" header live — patches just the changed
+    // member's profile in place rather than re-fetching the whole conversation.
+    private func handleProfileUpdate(_ record: [String: AnyJSON]) async {
+        guard
+            let idStr = record["id"]?.stringValue, let id = UUID(uuidString: idStr),
+            let idx = conversationMembers.firstIndex(where: { $0.userId == id })
+        else { return }
+
+        var profile = conversationMembers[idx].profile
+        if let isOnline = record["is_online"]?.boolValue {
+            profile.isOnline = isOnline
+        }
+        if let lastSeenStr = record["last_seen_at"]?.stringValue,
+           let lastSeen = Self.parseRealtimeDate(lastSeenStr) {
+            profile.lastSeenAt = lastSeen
+        }
+        conversationMembers[idx].profile = profile
     }
 
     // Supabase Realtime sends timestamptz as ISO8601 with optional fractional seconds.
@@ -540,101 +600,57 @@ final class ChatViewModel {
         _dateParserFull.date(from: str) ?? _dateParserPlain.date(from: str)
     }
 
-    // MARK: - Encryption helpers
+    // MARK: - Encryption helpers (v2 — branches on enc_v first, then iv)
 
-    private func encrypt(plaintext: String, otherUserId: UUID?) async -> (content: String, iv: String?) {
-        guard let otherUserId else {
-            return (Data(plaintext.utf8).base64EncodedString(), nil)
-        }
-        do {
-            let key = try await sharedKey(for: otherUserId)
-            let result = try EncryptionService.encryptMessage(plaintext, key: key)
-            return result
-        } catch {
-            return (Data(plaintext.utf8).base64EncodedString(), nil)
-        }
-    }
-
-    private func decryptAll(_ raw: [DbMessage], otherUserId: UUID?) async -> [DecryptedMessage] {
+    private func decryptAll(_ raw: [DbMessage]) async -> [DecryptedMessage] {
         var result: [DecryptedMessage] = []
         for msg in raw.reversed() {
-            var content = msg.content
-            let isFromOther = msg.senderId != nil && msg.senderId != currentUserId
-
-            if isFromOther, let otherId = msg.senderId ?? otherUserId {
-                content = await decryptContent(msg.content, iv: msg.iv, otherUserId: otherId)
-            } else if msg.iv == nil {
-                content = EncryptionService.decryptLegacy(msg.content) ?? msg.content
-            }
-
+            let (content, failed) = await decryptDbMessage(msg)
             result.append(DecryptedMessage(
                 id: msg.id, conversationId: msg.conversationId, senderId: msg.senderId,
                 content: content, type: msg.type, mediaUrl: msg.mediaUrl,
                 replyToId: msg.replyToId, threadId: msg.threadId,
                 editedAt: msg.editedAt, deletedAt: msg.deletedAt, createdAt: msg.createdAt,
-                senderProfile: msg.senderProfile
+                senderProfile: msg.senderProfile, decryptFailed: failed
             ))
         }
         return result
     }
 
-    private func decryptContent(_ content: String, iv: String?, otherUserId: UUID) async -> String {
-        do {
-            let key = try await sharedKey(for: otherUserId)
-            return try EncryptionService.decryptMessage(content: content, iv: iv, key: key)
-        } catch {
-            return EncryptionService.decryptLegacy(content) ?? content
+    // enc_v == 2 → envelope path; no envelope for this device ⇒ permanent, honest
+    // failure (never falls through to phase-1 decoding). enc_v == nil && iv == nil
+    // → phase-1 plain base64. Anything else → failure. Media/system rows have
+    // enc_v == nil and iv == nil too, so they resolve via the phase-1 branch, which
+    // is a no-op for their empty `content`.
+    private func decryptDbMessage(_ msg: DbMessage) async -> (content: String, failed: Bool) {
+        if msg.encV == 2 {
+            guard let iv = msg.iv else { return ("", true) }
+            // Await registration BEFORE giving up on a missing identity key — a
+            // device that hasn't finished registering yet must get the chance to
+            // before this is reported as a decrypt failure.
+            try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
+            guard let privKey = loadedIdentityPrivateKey() else { return ("", true) }
+            guard let plaintext = await EnvelopeEncryption.decryptV2(
+                messageId: msg.id, content: msg.content, iv: iv,
+                repository: repository, myPrivateKey: privKey,
+                myFingerprint: EncryptionService.fingerprint(for: privKey.publicKey)
+            ) else { return ("", true) }
+            return (plaintext, false)
+        } else if msg.encV == nil && msg.iv == nil {
+            return (EncryptionService.decryptLegacy(msg.content) ?? msg.content, false)
+        } else {
+            return ("", true)
         }
     }
 
-    private func sharedKey(for otherUserId: UUID) async throws -> SymmetricKey {
-        // 1. In-memory cache (fastest — no Keychain read)
-        if let cached = derivedKeyCache { return cached }
-
-        // 2. Keychain cache
-        if let cached = try? KeyStore.loadDerivedKey(forConversation: conversationId) {
-            derivedKeyCache = cached
-            return cached
-        }
-
-        // 3. Derive: load identity key (cached in memory after first load), fetch peer's public key
-        if identityPrivKeyCache == nil {
-            identityPrivKeyCache = try KeyStore.loadIdentityKeyPair()
-        }
-        guard let myPrivKey = identityPrivKeyCache else {
-            throw EncryptionService.Error.invalidJWK
-        }
-
-        // Decode only the x/y fields — web JWKs also contain ext:Bool and key_ops:[String]
-        // which break [String:String] decoding; Codable ignores unknown fields in a struct.
-        struct DeviceKeyRow: Decodable {
-            struct JWKCoords: Decodable { let x: String; let y: String }
-            let identityKey: JWKCoords?
-            enum CodingKeys: String, CodingKey { case identityKey = "identity_key" }
-        }
-
-        let deviceRow: DeviceKeyRow = try await supabase
-            .from("devices")
-            .select("identity_key")
-            .eq("user_id", value: otherUserId.uuidString)
-            .eq("device_id", value: "1")
-            .single()
-            .execute()
-            .value
-
-        guard let coords = deviceRow.identityKey else { throw EncryptionService.Error.invalidJWK }
-        let theirKey = try EncryptionService.publicKeyFromJWK(["x": coords.x, "y": coords.y])
-        let derived = try EncryptionService.deriveSharedKey(myPrivateKey: myPrivKey, theirPublicKey: theirKey)
-        derivedKeyCache = derived
-        try? KeyStore.storeDerivedKey(derived, forConversation: conversationId)
-        return derived
+    private func loadedIdentityPrivateKey() -> P256.KeyAgreement.PrivateKey? {
+        if let cached = identityPrivKeyCache { return cached }
+        let key = try? KeyStore.loadIdentityKeyPair()
+        identityPrivKeyCache = key
+        return key
     }
 
     private func otherUserId(from messages: [DecryptedMessage]) -> UUID? {
         messages.first(where: { $0.senderId != currentUserId })?.senderId
-    }
-
-    private func otherUserId(from raw: [DbMessage]) -> UUID? {
-        raw.first(where: { $0.senderId != currentUserId })?.senderId
     }
 }

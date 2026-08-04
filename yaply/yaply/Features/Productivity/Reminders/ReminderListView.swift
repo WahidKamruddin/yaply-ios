@@ -3,10 +3,13 @@ import SwiftUI
 struct ReminderListView: View {
     let conversationId: UUID
     let currentUserId: UUID
+    var isCurrentUserAdmin: Bool = false
 
     @State private var reminders: [YaplyReminder] = []
     @State private var isLoading = false
     @State private var reminderToDismiss: YaplyReminder?
+    @State private var reminderToEditTime: YaplyReminder?
+    @State private var editRemindAt = Date()
 
     private let repo = ReminderRepository()
 
@@ -22,11 +25,7 @@ struct ReminderListView: View {
                 } else if reminders.isEmpty {
                     Spacer()
                     VStack(spacing: 8) {
-                        Image(systemName: "bell")
-                            .font(.system(size: 40))
-                            .foregroundStyle(Color.yaplySecondary)
-                        Text("No reminders")
-                            .foregroundStyle(Color.yaplySecondary)
+                        EmptyStateView(icon: "bell", title: "No reminders")
                         Text("Use /remind [time] [message]")
                             .font(.caption)
                             .foregroundStyle(Color.yaplySecondary.opacity(0.7))
@@ -35,20 +34,40 @@ struct ReminderListView: View {
                 } else {
                     List {
                         ForEach(reminders) { reminder in
-                            ReminderRowView(reminder: reminder)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    let isCreator = reminder.userId == currentUserId
-                                    Button(role: isCreator ? .destructive : .none) {
-                                        if isCreator { reminderToDismiss = reminder }
-                                    } label: {
-                                        Label("Dismiss", systemImage: "bell.slash")
-                                    }
-                                    .tint(isCreator ? Color.orange : Color(UIColor.systemGray4))
+                            ReminderRowView(reminder: reminder, isCurrentUserAdmin: isCurrentUserAdmin) {
+                                editRemindAt = reminder.remindAt
+                                reminderToEditTime = reminder
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                let canDismiss = reminder.userId == currentUserId || isCurrentUserAdmin
+                                let canInteract = !reminder.locked || isCurrentUserAdmin
+                                Button(role: canDismiss && canInteract ? .destructive : .none) {
+                                    if canDismiss && canInteract { reminderToDismiss = reminder }
+                                } label: {
+                                    Label("Dismiss", systemImage: "bell.slash")
                                 }
-                                .listRowBackground(Color.white)
+                                .tint(canDismiss && canInteract ? Color.orange : Color(UIColor.systemGray4))
+                            }
+                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                if isCurrentUserAdmin {
+                                    Button {
+                                        Task {
+                                            try? await repo.setLocked(id: reminder.id, locked: !reminder.locked)
+                                            await load()
+                                        }
+                                    } label: {
+                                        Label(reminder.locked ? "Unlock" : "Lock",
+                                              systemImage: reminder.locked ? "lock.open" : "lock")
+                                    }
+                                    .tint(.orange)
+                                }
+                            }
+                            .yaplyCardStyle()
+                            .yaplyCardRowContainer()
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
         }
@@ -58,6 +77,30 @@ struct ReminderListView: View {
         .onReceive(NotificationCenter.default.publisher(for: .yaplyItemCreated)) { notif in
             guard (notif.userInfo?["type"] as? String) == "reminders" else { return }
             Task { await load() }
+        }
+        .sheet(item: $reminderToEditTime) { reminder in
+            NavigationStack {
+                Form {
+                    DatePicker("Remind at", selection: $editRemindAt, displayedComponents: [.date, .hourAndMinute])
+                }
+                .navigationTitle("Edit Reminder Time")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { reminderToEditTime = nil }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            Task {
+                                try? await repo.updateRemindAt(reminderId: reminder.id, remindAt: editRemindAt)
+                                reminderToEditTime = nil
+                                await load()
+                            }
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
         }
         .alert("Dismiss Reminder", isPresented: Binding(
             get: { reminderToDismiss != nil },
@@ -86,6 +129,8 @@ struct ReminderListView: View {
 
 private struct ReminderRowView: View {
     let reminder: YaplyReminder
+    let isCurrentUserAdmin: Bool
+    let onEditTime: () -> Void
 
     private var isPast: Bool { reminder.remindAt <= Date() }
 
@@ -100,12 +145,27 @@ private struct ReminderRowView: View {
                     .foregroundStyle(isPast ? Color.orange : Color.yaplyAccent)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(reminder.message)
-                    .font(.system(size: 15))
-                    .foregroundStyle(Color.yaplyPrimary)
+                HStack(spacing: 4) {
+                    if reminder.locked {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.orange)
+                    }
+                    Text(reminder.message)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.yaplyPrimary)
+                }
                 HStack(spacing: 4) {
                     Text(reminder.remindAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
                         .foregroundStyle(isPast ? Color.orange : Color.yaplySecondary)
+                    if isCurrentUserAdmin {
+                        Button(action: onEditTime) {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 9))
+                                .foregroundStyle(Color.yaplySecondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                     Text("·")
                         .foregroundStyle(Color.yaplySecondary.opacity(0.4))
                     Text("set by \(reminder.creator?.name ?? "Unknown")")

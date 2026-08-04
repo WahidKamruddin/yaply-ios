@@ -3,6 +3,7 @@ import SwiftUI
 struct EventListView: View {
     let conversationId: UUID
     let currentUserId: UUID
+    var isCurrentUserAdmin: Bool = false
 
     @State private var events: [YaplyEvent] = []
     @State private var isLoading = false
@@ -56,21 +57,39 @@ struct EventListView: View {
                         List {
                             ForEach(filteredEvents) { event in
                                 Button(action: { selectedEvent = event }) {
-                                    EventRowView(event: event)
+                                    EventRowView(event: event, isCurrentUserAdmin: isCurrentUserAdmin, repo: repo, onUpdated: { Task { await load() } })
                                 }
                                 .buttonStyle(.plain)
+                                .yaplyCardStyle()
+                                .yaplyCardRowContainer()
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    let isCreator = event.createdBy == currentUserId
-                                    Button(role: isCreator ? .destructive : .none) {
-                                        if isCreator { eventToDelete = event }
+                                    let canDelete = event.createdBy == currentUserId || isCurrentUserAdmin
+                                    let effectiveCanDelete = canDelete && (!event.locked || isCurrentUserAdmin)
+                                    Button(role: effectiveCanDelete ? .destructive : .none) {
+                                        if effectiveCanDelete { eventToDelete = event }
                                     } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
-                                    .tint(isCreator ? .red : Color(UIColor.systemGray4))
+                                    .tint(effectiveCanDelete ? Color.yaplyDanger : Color(UIColor.systemGray4))
+                                }
+                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                    if isCurrentUserAdmin {
+                                        Button {
+                                            Task {
+                                                try? await repo.setLocked(id: event.id, locked: !event.locked)
+                                                await load()
+                                            }
+                                        } label: {
+                                            Label(event.locked ? "Unlock" : "Lock",
+                                                  systemImage: event.locked ? "lock.open" : "lock")
+                                        }
+                                        .tint(.orange)
+                                    }
                                 }
                             }
                         }
-                        .listStyle(.insetGrouped)
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
                     }
                 }
             }
@@ -110,18 +129,14 @@ struct EventListView: View {
             }
             Button("Cancel", role: .cancel) { eventToDelete = nil }
         } message: {
-            Text("\"\(eventToDelete?.name ?? "")\" will be permanently deleted.")
+            Text("\"\(eventToDelete?.name ?? "")\" will be permanently deleted. This cannot be undone.")
         }
     }
 
     private var emptyState: some View {
         VStack(spacing: 12) {
             Spacer()
-            Image(systemName: "calendar")
-                .font(.system(size: 40))
-                .foregroundStyle(Color.yaplySecondary)
-            Text("No events yet")
-                .foregroundStyle(Color.yaplySecondary)
+            EmptyStateView(icon: "calendar", title: "No events yet")
             HStack(spacing: 16) {
                 Button("+ Plan") {
                     createStatus = "planning"
@@ -198,42 +213,90 @@ struct EventListView: View {
 
 private struct EventRowView: View {
     let event: YaplyEvent
+    var isCurrentUserAdmin: Bool = false
+    var repo: EventRepository? = nil
+    var onUpdated: (() -> Void)? = nil
+
+    @State private var showEditStartsAt = false
+    @State private var editStartsAt = Date()
 
     var body: some View {
         HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(event.isPlanning ? Color(red: 0.929, green: 0.945, blue: 0.980) : Color(red: 0.9, green: 0.97, blue: 0.9))
+                    .fill(event.isPlanning ? Color.yaplyBackground : Color.yaplyConfirmedGreen)
                     .frame(width: 36, height: 36)
                 Image(systemName: event.isPlanning ? "map" : "calendar")
                     .font(.system(size: 14))
-                    .foregroundStyle(event.isPlanning ? Color.yaplyAccent : Color.green)
+                    .foregroundStyle(event.isPlanning ? Color.yaplyAccent : Color.yaplyMint)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(event.name)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Color.yaplyPrimary)
+                HStack(spacing: 4) {
+                    if event.locked {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.orange)
+                    }
+                    Text(event.name)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color.yaplyPrimary)
+                }
                 HStack(spacing: 6) {
                     if event.isPlanning {
                         Text("Planning")
                             .font(.system(size: 11, weight: .semibold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color(red: 0.929, green: 0.945, blue: 0.980))
+                            .background(Color.yaplyBackground)
                             .foregroundStyle(Color.yaplyAccent)
                             .clipShape(Capsule())
                     }
                     if let starts = event.startsAt, event.isConfirmed {
                         Text(starts.formatted(.dateTime.month(.abbreviated).day()))
-                            .font(.system(size: 11))
+                            .font(.caption)
                             .foregroundStyle(Color.yaplySecondary)
+                        if isCurrentUserAdmin {
+                            Button(action: {
+                                editStartsAt = starts
+                                showEditStartsAt = true
+                            }) {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(Color.yaplySecondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
                 Text("by \(event.creator?.name ?? "Unknown")")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(Color.yaplySecondary.opacity(0.7))
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
+        .sheet(isPresented: $showEditStartsAt) {
+            NavigationStack {
+                Form {
+                    DatePicker("Starts at", selection: $editStartsAt, displayedComponents: [.date, .hourAndMinute])
+                }
+                .navigationTitle("Edit Event Time")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showEditStartsAt = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            Task {
+                                try? await repo?.updateStartsAt(eventId: event.id, startsAt: editStartsAt)
+                                showEditStartsAt = false
+                                onUpdated?()
+                            }
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
     }
 }

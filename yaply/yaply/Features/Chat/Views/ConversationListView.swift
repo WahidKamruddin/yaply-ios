@@ -1,16 +1,19 @@
 import SwiftUI
 import Auth
 
+private enum BottomTab {
+    case home, chats, settings
+}
+
 struct ConversationListView: View {
     let currentUserId: UUID
     @State private var vm = ConversationListViewModel()
-    @State private var profileVm = ProfileViewModel()
     @State private var showNewConversation = false
-    @State private var showProfile = false
     @State private var searchText = ""
+    @State private var bottomTab: BottomTab = .home
+    @State private var conversationToDelete: ConversationListItem?
     private let convRepository = ConversationRepository()
     @Environment(AppRouter.self) private var router
-    @Environment(AuthService.self) private var authService
     @Environment(NotificationManager.self) private var notifications
 
     private var filtered: [ConversationListItem] {
@@ -27,88 +30,49 @@ struct ConversationListView: View {
             VStack(spacing: 0) {
                 // Header
                 HStack {
-                    Text("Messages")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(Color.yaplyPrimary)
+                    HStack(spacing: 8) {
+                        YaplyLogoMark(size: 26)
+                        Text("yaply")
+                            .font(.display(20, weight: .medium))
+                            .foregroundStyle(Color.yaplyPrimary)
+                    }
                     Spacer()
-                    Button(action: { showNewConversation = true }) {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 20))
-                            .foregroundStyle(Color.yaplyAccent)
+                    if bottomTab == .chats {
+                        Button(action: { showNewConversation = true }) {
+                            Image(systemName: "square.and.pencil")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 32, height: 32)
+                                .background(
+                                    LinearGradient(
+                                        colors: [Color.yaplyAccent, Color.yaplyAccentDark],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                                .clipShape(Circle())
+                                .shadow(color: Color.yaplyAccent.opacity(0.35), radius: 6, y: 3)
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .padding(.bottom, 12)
 
-                // Search
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(Color.yaplySecondary)
-                        .font(.system(size: 14))
-                    TextField("Search conversations...", text: $searchText)
-                        .font(.system(size: 14))
-                }
-                .padding(10)
-                .background(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.yaplyBorder))
-                .padding(.horizontal, 16)
-                .padding(.bottom, 8)
-
-                Divider().foregroundStyle(Color.yaplyBorder)
-
-                // Conversation list / empty state
-                if vm.isLoading {
-                    Spacer()
-                    ProgressView()
-                        .tint(Color.yaplyAccent)
-                    Spacer()
-                } else if filtered.isEmpty {
-                    Spacer()
-                    VStack(spacing: 8) {
-                        Image(systemName: "bubble.left.and.bubble.right")
-                            .font(.system(size: 40))
-                            .foregroundStyle(Color.yaplySecondary)
-                        Text(searchText.isEmpty ? "No conversations yet" : "No results")
-                            .font(.subheadline)
-                            .foregroundStyle(Color.yaplySecondary)
-                        if searchText.isEmpty {
-                            Button("Start a conversation") { showNewConversation = true }
-                                .font(.subheadline)
-                                .foregroundStyle(Color.yaplyAccent)
-                        }
-                    }
-                    Spacer()
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(filtered) { item in
-                                SwipeToDeleteConversationRow(
-                                    onDelete: {
-                                        guard let uid = vm.currentUserId else { return }
-                                        Task { await vm.deleteConversation(id: item.id, userId: uid) }
-                                    }
-                                ) {
-                                    Button(action: { router.push(.conversation(id: item.id)) }) {
-                                        ConversationRowView(item: item, currentUserId: currentUserId)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .contextMenu { muteMenu(for: item) }
-                                }
-                                Divider()
-                                    .padding(.leading, 76)
-                                    .foregroundStyle(Color.yaplyBorder)
-                            }
-                        }
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .padding(.horizontal, 0)
-                        .padding(.top, 8)
-                    }
+                switch bottomTab {
+                case .home:
+                    HomeView(
+                        currentUserId: currentUserId,
+                        conversations: vm.conversations,
+                        onOpenConversation: { router.push(.conversation(id: $0)) }
+                    )
+                case .chats:
+                    messagesContent
+                case .settings:
+                    SettingsView()
                 }
 
-                bottomBar
+                bottomNavBar
             }
         }
         .navigationBarHidden(true)
@@ -118,7 +82,6 @@ struct ConversationListView: View {
                 notifications.show(conversationId: convId, conversationName: convName, senderName: senderName)
             }
             await vm.load(userId: currentUserId)
-            await profileVm.load(userId: currentUserId)
         }
         .onChange(of: router.activeConversationId) { _, newId in
             vm.activeConversationId = newId
@@ -130,21 +93,91 @@ struct ConversationListView: View {
                 router.push(.conversation(id: convId))
             }
         }
-        .sheet(isPresented: $showProfile) {
-            ProfileView(
-                userId: currentUserId,
-                userEmail: authService.currentUser?.email ?? ""
-            )
-        }
         .refreshable { await vm.refresh(userId: currentUserId) }
+        .alert(
+            "Delete Conversation",
+            isPresented: Binding(
+                get: { conversationToDelete != nil },
+                set: { if !$0 { conversationToDelete = nil } }
+            ),
+            presenting: conversationToDelete
+        ) { item in
+            Button("Delete", role: .destructive) {
+                guard let uid = vm.currentUserId else { return }
+                Task { await vm.deleteConversation(id: item.id, userId: uid) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This conversation will be permanently deleted for you. This cannot be undone.")
+        }
     }
 
-    // MARK: - Delete helpers
+    // MARK: - Messages tab content
 
-    // MARK: - Mute helpers
+    private var messagesContent: some View {
+        VStack(spacing: 0) {
+            // Search
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(Color.yaplySecondary)
+                    .font(.system(size: 14))
+                TextField("Search conversations...", text: $searchText)
+                    .font(.system(size: 14))
+            }
+            .padding(10)
+            .background(Color.yaplyTint)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.yaplyBorder))
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
+
+            Divider().foregroundStyle(Color.yaplyBorder)
+
+            if vm.isLoading {
+                Spacer()
+                ProgressView()
+                    .tint(Color.yaplyAccent)
+                Spacer()
+            } else if filtered.isEmpty {
+                Spacer()
+                VStack(spacing: 8) {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                        .font(.system(size: 40))
+                        .foregroundStyle(Color.yaplySecondary)
+                    Text(searchText.isEmpty ? "No conversations yet" : "No results")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.yaplySecondary)
+                    if searchText.isEmpty {
+                        Button("Start a conversation") { showNewConversation = true }
+                            .font(.subheadline)
+                            .foregroundStyle(Color.yaplyAccent)
+                    }
+                }
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(filtered) { item in
+                            Button(action: { router.push(.conversation(id: item.id)) }) {
+                                ConversationRowView(item: item, currentUserId: currentUserId)
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu { rowContextMenu(for: item) }
+                            Divider()
+                                .padding(.leading, 76)
+                                .foregroundStyle(Color.yaplyBorder)
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+            }
+        }
+    }
+
+    // MARK: - Row context menu (mute + delete)
 
     @ViewBuilder
-    private func muteMenu(for item: ConversationListItem) -> some View {
+    private func rowContextMenu(for item: ConversationListItem) -> some View {
         if item.isMuted {
             Button {
                 Task { await muteItem(item.id, until: nil) }
@@ -165,6 +198,12 @@ struct ConversationListView: View {
                 Task { await muteItem(item.id, until: Date(timeIntervalSince1970: 8_640_000_000)) }
             } label: { Label("Mute forever", systemImage: "bell.slash.fill") }
         }
+        Divider()
+        Button(role: .destructive) {
+            conversationToDelete = item
+        } label: {
+            Label("Delete conversation", systemImage: "trash")
+        }
     }
 
     private func muteItem(_ conversationId: UUID, until: Date?) async {
@@ -172,119 +211,34 @@ struct ConversationListView: View {
         await vm.refresh(userId: currentUserId)
     }
 
-    // MARK: - Bottom bar
+    // MARK: - Bottom nav bar (Messages / Requests / Menu)
 
-    private var bottomBar: some View {
+    private var bottomNavBar: some View {
         VStack(spacing: 0) {
             Divider().foregroundStyle(Color.yaplyBorder)
 
-            HStack(spacing: 10) {
-                Button { showProfile = true } label: {
-                    HStack(spacing: 10) {
-                        AvatarView(
-                            url: profileVm.profile?.avatarUrl,
-                            name: profileVm.profile?.name ?? "You",
-                            size: 34
-                        )
-                        Text(profileVm.profile?.name ?? "You")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(Color.yaplyPrimary)
-                            .lineLimit(1)
-                    }
-                }
-                .buttonStyle(.plain)
-
-                Spacer()
-
-                Button { showProfile = true } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Color.yaplySecondary)
-                        .frame(width: 32, height: 32)
-                        .background(Color.yaplyBackground)
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    Task { try? await authService.signOut() }
-                } label: {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Color.yaplySecondary)
-                        .frame(width: 32, height: 32)
-                        .background(Color.yaplyBackground)
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
+            HStack(spacing: 0) {
+                bottomNavButton(icon: "house.fill", label: "Home", tab: .home)
+                bottomNavButton(icon: "message.fill", label: "Chats", tab: .chats)
+                bottomNavButton(icon: "gearshape.fill", label: "Settings", tab: .settings)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(Color.white)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+            .background(Color.yaplySurface)
         }
     }
-}
 
-// MARK: - Swipe-to-delete row wrapper
-
-private struct SwipeToDeleteConversationRow<Content: View>: View {
-    let onDelete: () -> Void
-    @ViewBuilder let content: () -> Content
-
-    private let revealWidth: CGFloat = 68
-    private let threshold: CGFloat = 36
-
-    @State private var offset: CGFloat = 0
-    @State private var showConfirm = false
-
-    var body: some View {
-        ZStack(alignment: .trailing) {
-            // Red trash area revealed by swipe
-            Button {
-                showConfirm = true
-            } label: {
-                Image(systemName: "trash.fill")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.white)
-                    .frame(width: revealWidth)
-                    .frame(maxHeight: .infinity)
+    private func bottomNavButton(icon: String, label: String, tab: BottomTab) -> some View {
+        Button { bottomTab = tab } label: {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 19))
+                Text(label)
+                    .font(.system(size: 10, weight: bottomTab == tab ? .semibold : .medium))
             }
-            .background(Color.red)
-            .opacity(offset < 0 ? 1 : 0)
-
-            content()
-                .background(Color.white)
-                .offset(x: offset)
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 10)
-                        .onChanged { value in
-                            let dx = value.translation.width
-                            let dy = value.translation.height
-                            guard abs(dx) > abs(dy) else { return }
-                            if dx < 0 {
-                                offset = max(-revealWidth, dx)
-                            } else if offset < 0 {
-                                offset = min(0, offset + dx)
-                            }
-                        }
-                        .onEnded { _ in
-                            withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
-                                offset = offset < -threshold ? -revealWidth : 0
-                            }
-                        }
-                )
+            .foregroundStyle(bottomTab == tab ? Color.yaplyAccent : Color.yaplySecondary)
+            .frame(maxWidth: .infinity)
         }
-        .clipped()
-        .alert("Delete Conversation", isPresented: $showConfirm) {
-            Button("Delete", role: .destructive) {
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) { offset = 0 }
-                onDelete()
-            }
-            Button("Cancel", role: .cancel) {
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) { offset = 0 }
-            }
-        } message: {
-            Text("This will remove the conversation from your list.")
-        }
+        .buttonStyle(.plain)
     }
 }

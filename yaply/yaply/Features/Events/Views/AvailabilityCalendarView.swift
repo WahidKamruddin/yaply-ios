@@ -57,9 +57,9 @@ struct AvailabilityCalendarView: View {
     private func heatColor(_ count: Int) -> Color {
         guard count > 0 else { return Color.yaplyBackground }
         let ratio = Double(count) / Double(totalMembers)
-        if ratio <= 0.33 { return Color(red: 0.863, green: 0.906, blue: 0.969) }
-        if ratio <= 0.66 { return Color(red: 0.576, green: 0.710, blue: 0.937) }
-        return Color(red: 0.357, green: 0.553, blue: 0.937)
+        if ratio <= 0.33 { return Color.yaplyBorder }
+        if ratio <= 0.66 { return Color.yaplyAccent.opacity(0.6) }
+        return Color.yaplyAccent
     }
 
     private func timeLabel(_ row: Int) -> String? {
@@ -147,7 +147,7 @@ struct AvailabilityCalendarView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.yaplySecondary)
                     .frame(width: 30, height: 30)
-                    .background(Color.white)
+                    .background(Color.yaplySurface)
                     .clipShape(RoundedRectangle(cornerRadius: 7))
                     .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.yaplyBorder))
             }
@@ -163,14 +163,14 @@ struct AvailabilityCalendarView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.yaplySecondary)
                     .frame(width: 30, height: 30)
-                    .background(Color.white)
+                    .background(Color.yaplySurface)
                     .clipShape(RoundedRectangle(cornerRadius: 7))
                     .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.yaplyBorder))
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(Color.white)
+        .background(Color.yaplySurface)
         .overlay(alignment: .bottom) { Divider() }
     }
 
@@ -202,7 +202,7 @@ struct AvailabilityCalendarView: View {
                 .padding(.vertical, 4)
             }
         }
-        .background(Color.white)
+        .background(Color.yaplySurface)
         .overlay(alignment: .bottom) { Divider() }
     }
 
@@ -231,7 +231,7 @@ struct AvailabilityCalendarView: View {
 
                         Rectangle()
                             .fill(isMine
-                                  ? Color(red: 0.102, green: 0.153, blue: 0.267)
+                                  ? Color.yaplyPrimary
                                   : heatColor(count))
                             .frame(maxWidth: .infinity)
                             .frame(height: cellH)
@@ -264,7 +264,7 @@ struct AvailabilityCalendarView: View {
                 }
             }
         }
-        .background(Color.white)
+        .background(Color.yaplySurface)
     }
 
     // MARK: - Member chips
@@ -297,7 +297,7 @@ struct AvailabilityCalendarView: View {
                         }
                         .padding(.horizontal, 7)
                         .padding(.vertical, 5)
-                        .background(Color.white)
+                        .background(Color.yaplySurface)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yaplyBorder))
                     }
@@ -334,7 +334,7 @@ struct AvailabilityCalendarView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Color.white)
+        .background(Color.yaplySurface)
         .overlay(alignment: .top) { Divider() }
     }
 

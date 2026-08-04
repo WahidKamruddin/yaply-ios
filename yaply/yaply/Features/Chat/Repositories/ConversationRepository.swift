@@ -192,41 +192,16 @@ final class ConversationRepository {
     }
 
     func createGroupConversation(userId: UUID, memberIds: [UUID], name: String) async throws -> UUID {
-        struct NewConv: Decodable { let id: UUID }
-        struct GroupConvInsert: Encodable {
-            let type: String
-            let name: String
-            let created_by: String
+        struct Params: Encodable {
+            let p_name: String
+            let p_member_ids: [String]
         }
-        let conv: NewConv = try await supabase
-            .from("conversations")
-            .insert(GroupConvInsert(type: "group", name: name, created_by: userId.uuidString))
-            .select("id")
-            .single()
+        let others = memberIds.filter { $0 != userId }.map { $0.uuidString }
+        let convId: UUID = try await supabase
+            .rpc("create_group_conversation", params: Params(p_name: name.isEmpty ? "Group" : name, p_member_ids: others))
             .execute()
             .value
-
-        struct MemberInsert: Encodable {
-            let conversation_id: String
-            let user_id: String
-            let role: String
-        }
-
-        // Insert creator first (RLS policy requires them to exist as owner before others can be added)
-        try await supabase
-            .from("conversation_members")
-            .insert(MemberInsert(conversation_id: conv.id.uuidString, user_id: userId.uuidString, role: "owner"))
-            .execute()
-
-        let others = memberIds.filter { $0 != userId }
-        if !others.isEmpty {
-            try await supabase
-                .from("conversation_members")
-                .insert(others.map { MemberInsert(conversation_id: conv.id.uuidString, user_id: $0.uuidString, role: "member") })
-                .execute()
-        }
-
-        return conv.id
+        return convId
     }
 
     func searchUsers(query: String, excluding userId: UUID) async throws -> [Profile] {
@@ -280,6 +255,24 @@ final class ConversationRepository {
             .delete()
             .eq("conversation_id", value: conversationId.uuidString)
             .eq("user_id", value: userId.uuidString)
+            .execute()
+    }
+
+    func promoteMemberToAdmin(conversationId: UUID, targetUserId: UUID) async throws {
+        struct RoleUpdate: Encodable { let role: String }
+        try await supabase
+            .from("conversation_members")
+            .update(RoleUpdate(role: "admin"))
+            .eq("conversation_id", value: conversationId.uuidString)
+            .eq("user_id", value: targetUserId.uuidString)
+            .execute()
+    }
+
+    func deleteGroupForEveryone(conversationId: UUID) async throws {
+        try await supabase
+            .from("conversations")
+            .delete()
+            .eq("id", value: conversationId.uuidString)
             .execute()
     }
 
