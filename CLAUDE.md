@@ -86,6 +86,73 @@ this caused).
 
 ---
 
+## Live Device Pairing (contract — NOT YET IMPLEMENTED ON iOS)
+
+> Web shipped this; iOS has not. Until it does, an iOS install can only read
+> messages sealed after it registered its own device key.
+
+Because every install has its own identity keypair, a new device can't read
+older history. Web solves this with **live pairing**: an already-linked device
+(the *sender*) transfers its key material to a newly signed-in one (the
+*receiver*) over an ephemeral private Realtime channel. **Nothing is stored
+server-side** — there is no PIN, vault, or recovery blob, deliberately.
+
+**Two independent role axes.** *Trust role* (`sender` holds keys / `receiver`
+needs them) is fixed by which device has history. *Rendezvous role* (who shows
+the code vs. who enters it) is a free choice. All four device combinations must
+work, so **the pairing code carries only a short rendezvous id, never key
+material** — it is small enough to type. **iOS is most often the sender to a
+desktop receiver, so the presenter-with-typed-code path is mandatory; never gate
+pairing behind the camera.**
+
+**Contract to reproduce byte-for-byte:**
+- **Code:** 8 chars Crockford base32 (`0-9A-Z` minus I/L/O/U), displayed
+  `XXXX-XXXX`. Parse leniently: case-insensitive, strip dashes/spaces, fold
+  `O→0` and `I,L→1`. The code is a rendezvous identifier, **not a secret**.
+- **QR deep link:** `https://<origin>/link#c=<code>` — code in the **fragment**,
+  never the query string (keeps it out of logs/proxies/Referer).
+- **Channel:** topic `pairing:<userId>:<code>`, opened **private**
+  (`$0.isPrivate = true`). RLS on `realtime.messages` scopes it to `auth.uid()`
+  (web migration `00034_pairing_channel_authorization.sql`).
+- **Key agreement:** ephemeral P-256 per side, **memory-only** (never Keychain,
+  never the DB). `secret` = the **raw** ECDH shared secret bytes used directly as
+  an AES-256-GCM key — CryptoKit `P256.KeyAgreement`, take
+  `sharedSecret.withUnsafeBytes { Data($0) }`; do **not** use
+  `hkdfDerivedSymmetricKey`. Same no-HKDF convention as the envelope KEK.
+- **SAS:** `SHA-256(secret ‖ "yaply-sas-v1")`, first 4 bytes big-endian,
+  `mod 1_000_000`, zero-padded to 6 digits. Drift here means the two devices show
+  different numbers and the user correctly refuses to pair.
+- **Payload:** `ciphertext = base64(AES-GCM(secret, JSON [{deviceId, pub, priv}]) + tag)`,
+  `iv = base64(nonce[12])`. `pub`/`priv` are **JWKs**, not x963/DER.
+- **Handshake events:** `ready` (sender, on subscribe) → `hello {ephPub}`
+  (receiver, on subscribe *and* on `ready` — neither side can assume it joined
+  first) → `ack {ephPub}` (sender) → human confirms SAS on the sender →
+  `payload {iv, ciphertext}` → `done` (receiver).
+- **TTL:** 90s, single-use, with an explicit "code expired" state.
+
+**Invariants — each guards a real failure mode:**
+- **The SAS confirmation is load-bearing, not decorative.** It is what stops a
+  second authenticated session on the *same account* (stolen JWT / logged-in tab)
+  from racing to join and impersonating the receiver — that attacker passes the
+  RLS policy. Never ship a "skip verification" path.
+- **Abort on a second joiner:** a different `ephPub` arriving on a live session
+  cancels the whole session. Never pick a winner — that turns a race into key
+  exfiltration.
+- **Adopted keys are decrypt-only:** never publish them to `devices`, never seal
+  new messages to them (keep using this install's own key), and **merge** rather
+  than overwrite on a second pairing.
+- **Candidate fingerprints, not one:** envelope lookup must filter
+  `recipient_fp IN (own fp, ...escrowed fps)` and pick the private key matching
+  the envelope's `recipient_fp`. Apply identically at every decrypt site, the
+  same lockstep rule as the `enc_v`/`iv` invariants.
+
+**Accepted limitation:** both devices must be online simultaneously. No
+cold-start recovery — lose every linked device at once and history is
+permanently undecryptable. That is the deliberate trade for storing no recovery
+secret server-side.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology | Why |
@@ -192,7 +259,7 @@ yaply/yaply/
 │   ├── Profile.swift, Conversation.swift, Message.swift, Device.swift
 ├── Navigation/  (AppRoute, AppRouter)
 └── Features/
-    ├── Auth/  (AuthService, AuthViewModel, AuthView, SettingsView, ProfileView)
+    ├── Auth/  (AuthService, AuthViewModel, AuthView, SettingsView)
     ├── Chat/
     │   ├── Repositories/  (ConversationRepository, MessageRepository, PresenceService)
     │   ├── ViewModels/    (ConversationListViewModel, ChatViewModel, ThreadViewModel)
@@ -200,6 +267,10 @@ yaply/yaply/
     │                        MessageInputView, ReplyStripView, DateSeparatorView,
     │                        ConversationRowView, GroupInfoView, NewConversationView,
     │                        ThreadView, ConversationDetailView)
+    ├── Friends/
+    │   ├── Repositories/  (FriendsRepository, FriendsRepository+Errors)
+    │   ├── ViewModels/    (FriendsViewModel, ProfileCardViewModel)
+    │   └── Views/         (FriendsView, ProfileView, UserRowView, MessageRequestBarView)
     ├── Events/
     │   ├── Repositories/EventRepository.swift   ← YaplyEvent, YaplyEventAvailability, AvailMember, YaplyEventRsvp; CRUD + availability + RSVP
     │   └── Views/
@@ -399,9 +470,9 @@ After migration `00022_reminders_shared_access.sql`, reminders are visible to al
 
 ---
 
-## Friends System — NOT YET IMPLEMENTED ON iOS (web shipped it; migration 00033)
+## Friends System (migration 00033)
 
-The schema and every gate are already live in the shared Supabase project, so **iOS is currently out of sync**: group creation with a non-friend now fails, and a DM from a non-friend silently becomes a message request the iOS client does not render as one. Implementing this is the next cross-platform task.
+Implemented — `Features/Friends/`: `Repositories/FriendsRepository.swift` (all RPC/table calls), `Repositories/FriendsRepository+Errors.swift` (`friendlyFriendsError`, the RPC error-string → human-text map), `ViewModels/FriendsViewModel.swift` (backs the whole Friends screen — all tabs share one VM), `ViewModels/ProfileCardViewModel.swift` (backs the shared profile card), `Views/FriendsView.swift` (pushed via `AppRoute.friends`, custom pill-tab row over Friends/Requests/Sent/Discover/Blocked — matches `ConversationListView`'s hand-rolled chrome, no `TabView`), `Views/ProfileView.swift` (the one shared profile card, always a `.sheet`, opened from `ChatView`'s header avatar and every `UserRowView` tap), `Views/UserRowView.swift`, `Views/MessageRequestBarView.swift` (replaces `MessageInputView` in `ChatView` while `ChatViewModel.myRequestState == "pending"`). `ConversationListItem.requestState` (from `Models/Conversation.swift`) drives the "Message requests" section split in `ConversationListView`; `ConversationListViewModel.pendingFriendRequestCount` (its own `FriendsRepository` fetch, refreshed off a `friendships` realtime subscription) drives the header badge next to the `person.2` icon that pushes `.friends`.
 
 **Two distinct consent mechanisms — do not conflate them:**
 - **Friend requests** (`friendships`) — the social relationship. Required to add someone to a group; drives the friends list, suggestions, mutual counts.
@@ -415,14 +486,16 @@ The schema and every gate are already live in the shared Supabase project, so **
 **Never delete a membership row to decline** — `trg_delete_empty_conversation` would delete the whole conversation and its messages. Accepting/declining is an UPDATE of your **own** `conversation_members` row (covered by the existing "self can update" policy; no RPC needed).
 
 **Implementation contract:**
-- Create/accept/block only via the RPCs; `friendships` has no INSERT/UPDATE policy so a direct write fails silently. Decline, cancel and unfriend are all a plain DELETE of the `friendships` row.
-- Relationship state comes from batched `get_relationships([uuid])` — six states, `none | pending_out | pending_in | friends | blocked | blocked_by`. Render `blocked_by` **identically to `none`**; revealing a block is itself information.
-- People search must use `search_users`, not a direct `profiles` query (which skips the block filter). Note `profiles` SELECT is intentionally still `using (true)`, so a blocked user can technically still read the blocker's profile row — a documented, accepted limitation.
+- Create/accept/block only via the RPCs; `friendships` has no INSERT/UPDATE policy so a direct write fails silently. Decline, cancel and unfriend are all a plain DELETE of the `friendships` row — `FriendsRepository.removeFriendship(friendshipId:)` is the one method behind all three.
+- Relationship state comes from batched `get_relationships([uuid])` — six states, `none | pending_out | pending_in | friends | blocked | blocked_by`. Render `blocked_by` **identically to `none`**; revealing a block is itself information. `FriendsRepository.fetchRelationships(userIds:)` is always called with the full id array in one round trip — never per row.
+- People search uses `search_users` (`FriendsRepository.searchUsers`), not a direct `profiles` query (which skips the block filter) — this also replaced `ConversationRepository`'s old raw `profiles` ilike search, and `GroupInfoView`'s add-member search. Note `profiles` SELECT is intentionally still `using (true)`, so a blocked user can technically still read the blocker's profile row — a documented, accepted limitation.
 - Block = sends blocked both directions, new DM raises `blocked`, friendship deleted, hidden from search/suggestions. History is not deleted and the blocked party gets no signal.
-- Map RPC errors to human text: `blocked`, `cannot send in this conversation`, `can only add friends to groups`, `friend request already exists`, `cannot friend yourself`.
-- `friendships` is in the realtime publication — subscribe for request badges, and follow the house rule of treating the payload as an invalidation trigger.
+- RPC errors are mapped to human text via `friendlyFriendsError(_:)`: `blocked`, `cannot send in this conversation`, `can only add friends to groups`, `friend request already exists`, `cannot friend yourself`, `cannot message yourself`.
+- `friendships` is in the realtime publication — `FriendsViewModel.startRealtime` and `ConversationListViewModel`'s own subscription both treat every insert/update/delete purely as an invalidation trigger and re-fetch, matching `ChatViewModel.startRealtime`'s house style (never parse the payload).
 
 **All gating is server-side and must stay that way.** The conversation RPCs are `SECURITY DEFINER` and bypass RLS, so a Swift-side check is decorative.
+
+**Not yet built:** a dedicated "unfriend/block from a group member row" shortcut (currently only reachable via the shared `ProfileView` card); device-level friend-request push notifications (in-app badge/realtime only for now).
 
 ---
 
