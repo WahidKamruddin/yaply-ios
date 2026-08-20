@@ -102,6 +102,8 @@ struct ContentView: View {
                 userId: userId,
                 userEmail: authService.currentUser?.email ?? ""
             )
+        case .friends:
+            FriendsView(currentUserId: userId)
         }
     }
 }

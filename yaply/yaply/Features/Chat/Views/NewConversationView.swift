@@ -14,6 +14,7 @@ struct NewConversationView: View {
     @Environment(AppRouter.self) private var router
 
     private let repo = ConversationRepository()
+    private let friendsRepo = FriendsRepository()
 
     private var isGroup: Bool { selected.count > 1 }
     private var canCreate: Bool { !selected.isEmpty && !isCreating }
@@ -171,7 +172,7 @@ struct NewConversationView: View {
         guard query.count >= 2 else { results = []; return }
         isSearching = true
         do {
-            results = try await repo.searchUsers(query: query, excluding: currentUserId)
+            results = try await friendsRepo.searchUsers(query: query)
         } catch {
             self.error = error.localizedDescription
         }
@@ -195,7 +196,7 @@ struct NewConversationView: View {
             }
             onConversationCreated(convId)
         } catch {
-            self.error = error.localizedDescription
+            self.error = friendlyFriendsError(error)
         }
         isCreating = false
     }

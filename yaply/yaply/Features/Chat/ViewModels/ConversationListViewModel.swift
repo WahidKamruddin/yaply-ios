@@ -12,14 +12,24 @@ final class ConversationListViewModel {
     var activeConversationId: UUID? { get { _activeId } set { _activeId = newValue } }
     var onBackgroundMessage: ((_ conversationId: UUID, _ conversationName: String, _ senderName: String) -> Void)?
 
+    // DMs from a non-friend land 'pending' (see Friends System docs) — shown in
+    // their own section, excluded (along with 'declined') from the main list.
+    var messageRequests: [ConversationListItem] { conversations.filter(\.isMessageRequest) }
+    var acceptedConversations: [ConversationListItem] { conversations.filter { !$0.isMessageRequest && !$0.isDeclined } }
+
+    // Pending incoming friend-request count for the header badge.
+    private(set) var pendingFriendRequestCount = 0
+
     private var _activeId: UUID?
     private let repository = ConversationRepository()
+    private let friendsRepository = FriendsRepository()
     private var realtimeTask: Task<Void, Never>?
     private var realtimeChannel: RealtimeChannelV2?
 
     func load(userId: UUID) async {
         isLoading = true
         await refresh(userId: userId)
+        await refreshFriendRequestCount(userId: userId)
         isLoading = false
         startRealtime(userId: userId)
     }
@@ -29,6 +39,12 @@ final class ConversationListViewModel {
             conversations = try await repository.fetchConversations(userId: userId)
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    func refreshFriendRequestCount(userId: UUID) async {
+        if let requests = try? await friendsRepository.fetchFriendRequests(userId: userId) {
+            pendingFriendRequestCount = requests.incoming.count
         }
     }
 
@@ -54,6 +70,9 @@ final class ConversationListViewModel {
             realtimeChannel = channel
             let messageInserts = channel.postgresChange(InsertAction.self, schema: "public", table: "messages")
             let profileUpdates = channel.postgresChange(UpdateAction.self, schema: "public", table: "profiles")
+            let friendshipInserts = channel.postgresChange(InsertAction.self, schema: "public", table: "friendships")
+            let friendshipUpdates = channel.postgresChange(UpdateAction.self, schema: "public", table: "friendships")
+            let friendshipDeletes = channel.postgresChange(DeleteAction.self, schema: "public", table: "friendships")
             try? await channel.subscribeWithError()
             await withTaskGroup(of: Void.self) { group in
                 group.addTask {
@@ -66,6 +85,15 @@ final class ConversationListViewModel {
                     for await _ in profileUpdates {
                         await self.refresh(userId: userId)
                     }
+                }
+                group.addTask {
+                    for await _ in friendshipInserts { await self.refreshFriendRequestCount(userId: userId) }
+                }
+                group.addTask {
+                    for await _ in friendshipUpdates { await self.refreshFriendRequestCount(userId: userId) }
+                }
+                group.addTask {
+                    for await _ in friendshipDeletes { await self.refreshFriendRequestCount(userId: userId) }
                 }
             }
         }

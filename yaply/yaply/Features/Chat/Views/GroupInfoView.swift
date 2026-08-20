@@ -23,6 +23,7 @@ struct GroupInfoView: View {
     @Environment(\.dismiss) private var dismiss
 
     private let convRepository = ConversationRepository()
+    private let friendsRepository = FriendsRepository()
 
     private var currentMemberIsAdmin: Bool {
         members.first(where: { $0.userId == currentUserId })?.isAdmin ?? false
@@ -267,7 +268,7 @@ struct GroupInfoView: View {
         isSearching = true
         defer { isSearching = false }
         let existingIds = Set(members.map(\.userId))
-        guard let results = try? await convRepository.searchUsers(query: query, excluding: currentUserId) else { return }
+        guard let results = try? await friendsRepository.searchUsers(query: query) else { return }
         searchResults = results.filter { !existingIds.contains($0.id) }
     }
 
@@ -279,7 +280,7 @@ struct GroupInfoView: View {
             await loadMembers()
             await onRefresh()
         } catch {
-            self.error = error.localizedDescription
+            self.error = friendlyFriendsError(error)
         }
     }
 

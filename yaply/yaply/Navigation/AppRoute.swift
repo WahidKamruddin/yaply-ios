@@ -7,4 +7,5 @@ enum AppRoute: Hashable {
     case noteList(conversationId: UUID)
     case settings
     case settingsDetail(SettingsTab)
+    case friends
 }
