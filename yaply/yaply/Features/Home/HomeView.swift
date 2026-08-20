@@ -5,6 +5,7 @@ import SwiftUI
 struct HomeView: View {
     let currentUserId: UUID
     let conversations: [ConversationListItem]
+    let isLoadingConversations: Bool
     let onOpenConversation: (UUID) -> Void
 
     @State private var vm = HomeViewModel()
@@ -101,7 +102,11 @@ struct HomeView: View {
     private var remindersCard: some View {
         cardShell(icon: "bell.fill", title: "Reminders") {
             if vm.isLoading {
-                loadingRow
+                VStack(spacing: 2) {
+                    ForEach(0..<3, id: \.self) { i in
+                        DashboardRowSkeleton(delay: Double(i) * 0.06)
+                    }
+                }
             } else if vm.reminders.isEmpty {
                 emptyRow("No reminders yet")
             } else {
@@ -140,7 +145,11 @@ struct HomeView: View {
     private var eventsCard: some View {
         cardShell(icon: "calendar", title: "Events") {
             if vm.isLoading {
-                loadingRow
+                VStack(spacing: 2) {
+                    ForEach(0..<3, id: \.self) { i in
+                        DashboardRowSkeleton(delay: Double(i) * 0.06)
+                    }
+                }
             } else if vm.upcomingEvents.isEmpty {
                 emptyRow("No upcoming events")
             } else {
@@ -178,7 +187,13 @@ struct HomeView: View {
 
     private var friendsCard: some View {
         cardShell(icon: "person.2.fill", title: "Friends") {
-            if friends.isEmpty {
+            if isLoadingConversations {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+                    ForEach(0..<6, id: \.self) { i in
+                        DashboardFriendSkeleton(delay: Double(i) * 0.06)
+                    }
+                }
+            } else if friends.isEmpty {
                 emptyRow("Start a direct message to see friends here")
             } else {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
@@ -224,14 +239,6 @@ struct HomeView: View {
         .background(Color.yaplyCard)
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.yaplyBorder))
-    }
-
-    private var loadingRow: some View {
-        Text("Loading…")
-            .font(.caption)
-            .foregroundStyle(Color.yaplySecondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
     }
 
     private func emptyRow(_ text: String) -> some View {
