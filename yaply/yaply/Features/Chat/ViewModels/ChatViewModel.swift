@@ -24,6 +24,11 @@ final class ChatViewModel {
     private(set) var isGroupConversation = false
     private(set) var groupName: String?
 
+    // My own conversation_members.request_state — 'accepted' unless this is a
+    // pending/declined DM (see Friends System docs). Drives whether ChatView shows
+    // MessageInputView or MessageRequestBarView.
+    private(set) var myRequestState: String = "accepted"
+
     private var nextCursor: Date?
     private(set) var hasMore = false
 
@@ -54,8 +59,10 @@ final class ChatViewModel {
         isLoading = true
         async let msgs: Void = loadMessages()
         async let conv: Void = loadConversationInfo()
+        async let reqState: Void = loadMyRequestState()
         await msgs
         await conv
+        await reqState
         isLoading = false
         try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
         await markAndFetchReceipts()
@@ -192,6 +199,29 @@ final class ChatViewModel {
                 lastReadAt: nil
             )
         }
+    }
+
+    func loadMyRequestState() async {
+        struct RequestStateRow: Decodable {
+            let requestState: String
+            enum CodingKeys: String, CodingKey { case requestState = "request_state" }
+        }
+        guard let row: RequestStateRow = try? await supabase
+            .from("conversation_members")
+            .select("request_state")
+            .eq("conversation_id", value: conversationId.uuidString)
+            .eq("user_id", value: currentUserId.uuidString)
+            .single()
+            .execute()
+            .value
+        else { return }
+        myRequestState = row.requestState
+    }
+
+    // Called locally right after Accept/Decline succeeds server-side, so the
+    // composer swaps immediately without waiting on a re-fetch.
+    func setMyRequestState(_ state: String) {
+        myRequestState = state
     }
 
     private func buildReactionGroups(from reactions: [Reaction]) -> [UUID: [ReactionGroup]] {

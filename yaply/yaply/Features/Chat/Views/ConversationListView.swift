@@ -17,8 +17,8 @@ struct ConversationListView: View {
     @Environment(NotificationManager.self) private var notifications
 
     private var filtered: [ConversationListItem] {
-        guard !searchText.isEmpty else { return vm.conversations }
-        return vm.conversations.filter { item in
+        guard !searchText.isEmpty else { return vm.acceptedConversations }
+        return vm.acceptedConversations.filter { item in
             item.displayName(currentUserId: currentUserId).localizedCaseInsensitiveContains(searchText)
         }
     }
@@ -37,6 +37,25 @@ struct ConversationListView: View {
                             .foregroundStyle(Color.yaplyPrimary)
                     }
                     Spacer()
+                    Button(action: { router.push(.friends) }) {
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "person.2")
+                                .font(.system(size: 17, weight: .medium))
+                                .foregroundStyle(Color.yaplyPrimary)
+                                .frame(width: 32, height: 32)
+                            if vm.pendingFriendRequestCount > 0 {
+                                Text(vm.pendingFriendRequestCount > 99 ? "99+" : "\(vm.pendingFriendRequestCount)")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .frame(minWidth: 16, minHeight: 16)
+                                    .background(Color.yaplyDanger)
+                                    .clipShape(Capsule())
+                                    .offset(x: 4, y: -2)
+                            }
+                        }
+                    }
+                    .padding(.trailing, bottomTab == .chats ? 4 : 0)
                     if bottomTab == .chats {
                         Button(action: { showNewConversation = true }) {
                             Image(systemName: "square.and.pencil")
@@ -64,6 +83,7 @@ struct ConversationListView: View {
                     HomeView(
                         currentUserId: currentUserId,
                         conversations: vm.conversations,
+                        isLoadingConversations: vm.isLoading,
                         onOpenConversation: { router.push(.conversation(id: $0)) }
                     )
                 case .chats:
@@ -134,11 +154,18 @@ struct ConversationListView: View {
             Divider().foregroundStyle(Color.yaplyBorder)
 
             if vm.isLoading {
-                Spacer()
-                ProgressView()
-                    .tint(Color.yaplyAccent)
-                Spacer()
-            } else if filtered.isEmpty {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(0..<8, id: \.self) { i in
+                            ConversationRowSkeleton(delay: Double(i) * 0.06)
+                            Divider()
+                                .padding(.leading, 76)
+                                .foregroundStyle(Color.yaplyBorder)
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+            } else if filtered.isEmpty && vm.messageRequests.isEmpty {
                 Spacer()
                 VStack(spacing: 8) {
                     Image(systemName: "bubble.left.and.bubble.right")
@@ -157,6 +184,9 @@ struct ConversationListView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
+                        if !vm.messageRequests.isEmpty && searchText.isEmpty {
+                            messageRequestsSection
+                        }
                         ForEach(filtered) { item in
                             Button(action: { router.push(.conversation(id: item.id)) }) {
                                 ConversationRowView(item: item, currentUserId: currentUserId)
@@ -171,6 +201,43 @@ struct ConversationListView: View {
                     .padding(.top, 8)
                 }
             }
+        }
+    }
+
+    // MARK: - Message requests section
+
+    private var messageRequestsSection: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Message requests")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.yaplySecondary)
+                Spacer()
+                Text("\(vm.messageRequests.count)")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .frame(minWidth: 16, minHeight: 16)
+                    .background(Color.yaplyAccent)
+                    .clipShape(Capsule())
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 4)
+
+            ForEach(vm.messageRequests) { item in
+                Button(action: { router.push(.conversation(id: item.id)) }) {
+                    ConversationRowView(item: item, currentUserId: currentUserId)
+                }
+                .buttonStyle(.plain)
+                Divider()
+                    .padding(.leading, 76)
+                    .foregroundStyle(Color.yaplyBorder)
+            }
+
+            Divider()
+                .padding(.top, 4)
+                .foregroundStyle(Color.yaplyBorder)
         }
     }
 

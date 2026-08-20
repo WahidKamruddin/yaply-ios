@@ -51,6 +51,13 @@ struct ConversationListItem: Identifiable, Hashable {
     var isMuted: Bool
     var mutedUntil: Date?
     var updatedAt: Date
+    // My own conversation_members.request_state — 'accepted' | 'pending' | 'declined'.
+    // See the Friends System docs: a DM from a non-friend arrives 'pending' (readable,
+    // not repliable until accepted); 'declined' hides the conversation entirely.
+    var requestState: String
+
+    var isMessageRequest: Bool { requestState == "pending" }
+    var isDeclined: Bool { requestState == "declined" }
 
     // Display name: group name, or the other participant's name for direct chats
     func displayName(currentUserId: UUID) -> String {

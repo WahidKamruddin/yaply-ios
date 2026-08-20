@@ -22,6 +22,7 @@ struct ChatView: View {
     @State private var viewportHeight: CGFloat = 1
     @State private var newMsgCount = 0
     @State private var commandFeedback: String?
+    @State private var showProfile = false
 
     private var isNearBottom: Bool { distFromBottom <= viewportHeight }
     private var showScrollButton: Bool { distFromBottom > viewportHeight }
@@ -273,26 +274,36 @@ struct ChatView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
-                MessageInputView(
-                    text: $messageText,
-                    replyTo: vm.replyToMessage,
-                    onSend: {
-                        let rawText = messageText.trimmingCharacters(in: .whitespaces)
-                        guard !rawText.isBlank else { return }
-                        messageText = ""
-                        vm.notifyStopTyping()
-                        if let cmd = ParsedCommand.parse(rawText) {
-                            Task { await handleCommand(cmd) }
-                        } else {
-                            Task { await vm.sendMessage(text: rawText) }
-                        }
-                    },
-                    onAttachment: { showMedia = true },
-                    onCancelReply: { vm.replyToMessage = nil },
-                    disabled: vm.isSending,
-                    onTyping: { vm.notifyTyping() },
-                    onStopTyping: { vm.notifyStopTyping() }
-                )
+                if vm.myRequestState == "pending" {
+                    MessageRequestBarView(
+                        conversationId: conversationId,
+                        currentUserId: currentUserId,
+                        otherUserId: currentOtherMember?.userId,
+                        onAccepted: { vm.setMyRequestState("accepted") },
+                        onDeclinedOrBlocked: { router.pop() }
+                    )
+                } else {
+                    MessageInputView(
+                        text: $messageText,
+                        replyTo: vm.replyToMessage,
+                        onSend: {
+                            let rawText = messageText.trimmingCharacters(in: .whitespaces)
+                            guard !rawText.isBlank else { return }
+                            messageText = ""
+                            vm.notifyStopTyping()
+                            if let cmd = ParsedCommand.parse(rawText) {
+                                Task { await handleCommand(cmd) }
+                            } else {
+                                Task { await vm.sendMessage(text: rawText) }
+                            }
+                        },
+                        onAttachment: { showMedia = true },
+                        onCancelReply: { vm.replyToMessage = nil },
+                        disabled: vm.isSending,
+                        onTyping: { vm.notifyTyping() },
+                        onStopTyping: { vm.notifyStopTyping() }
+                    )
+                }
             }
         }
         .navigationTitle(displayName)
@@ -320,6 +331,10 @@ struct ChatView: View {
                                 .foregroundStyle(isOnline ? Color.yaplyOnline : Color.yaplySecondary)
                         }
                     }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if !vm.isGroupConversation && currentOtherMember != nil { showProfile = true }
                 }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -353,11 +368,13 @@ struct ChatView: View {
                                 .foregroundStyle(Color.yaplyAccent)
                         }
                     } else {
-                        AvatarView(
-                            url: currentOtherMember?.profile.avatarUrl,
-                            name: displayName,
-                            size: 32
-                        )
+                        Button { showProfile = true } label: {
+                            AvatarView(
+                                url: currentOtherMember?.profile.avatarUrl,
+                                name: displayName,
+                                size: 32
+                            )
+                        }
                     }
                 }
             }
@@ -418,6 +435,11 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showHelp) {
             HelpView()
+        }
+        .sheet(isPresented: $showProfile) {
+            if let otherId = currentOtherMember?.userId {
+                ProfileView(userId: otherId, viewerId: currentUserId)
+            }
         }
     }
 

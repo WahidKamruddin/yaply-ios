@@ -7,11 +7,13 @@ final class ConversationRepository {
         struct MembershipRow: Decodable {
             let lastReadAt: Date?
             let mutedUntil: Date?
+            let requestState: String
             let conversations: ConvNested?
 
             enum CodingKeys: String, CodingKey {
                 case lastReadAt = "last_read_at"
                 case mutedUntil = "muted_until"
+                case requestState = "request_state"
                 case conversations
             }
 
@@ -51,6 +53,7 @@ final class ConversationRepository {
             .select("""
                 last_read_at,
                 muted_until,
+                request_state,
                 conversations(
                     id,
                     name,
@@ -172,7 +175,8 @@ final class ConversationRepository {
                 unreadCount: unreadCount,
                 isMuted: isMuted,
                 mutedUntil: mutedUntil,
-                updatedAt: conv.updatedAt
+                updatedAt: conv.updatedAt,
+                requestState: row.requestState
             )
         }
         .sorted {
@@ -202,17 +206,6 @@ final class ConversationRepository {
             .execute()
             .value
         return convId
-    }
-
-    func searchUsers(query: String, excluding userId: UUID) async throws -> [Profile] {
-        return try await supabase
-            .from("profiles")
-            .select("id, username, display_name, avatar_url, is_online, last_seen_at, created_at, updated_at")
-            .ilike("username", pattern: "%\(query)%")
-            .neq("id", value: userId.uuidString)
-            .limit(20)
-            .execute()
-            .value
     }
 
     func muteConversation(conversationId: UUID, userId: UUID, until: Date?) async throws {
