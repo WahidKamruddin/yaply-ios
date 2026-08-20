@@ -151,6 +151,42 @@ cold-start recovery — lose every linked device at once and history is
 permanently undecryptable. That is the deliberate trade for storing no recovery
 secret server-side.
 
+
+---
+
+## Device Management (contract — NOT YET IMPLEMENTED ON iOS)
+
+Settings → Devices on web lists, renames and revokes devices. iOS shares the
+same table and RPC, so it must follow the same rules.
+
+**Naming.** Write `platform = 'ios'` and a generated `device_name` (e.g.
+`iPhone 15 (App)`) **only at first registration**. A later login must never
+re-write `device_name` — a device the user renamed would silently revert.
+
+**Session capture.** Record the access token's `session_id` claim on the
+`devices` row at registration. Without it, revoking that device can delete the
+row but not its auth session, and the device stays signed in.
+
+**Revoking.** Call `revoke_device(p_device_id)` — never `DELETE` the row
+directly. A plain delete leaves the auth session alive, and the device would
+re-register on next launch. The RPC drops the row *and* the `auth.sessions` row
+(cascading `auth.refresh_tokens`).
+
+**Orphan check — mandatory.** At startup, if a locally stored `device_id` has no
+matching `devices` row, this install was revoked while offline: wipe **all**
+local keys (identity *and* adopted pairing keys) and register as a brand-new
+device. Without this step a revoked device republishes its old identity from
+local storage and silently undoes the revocation. It is also what forces the
+user to pair again to see history — the intended outcome.
+
+**Never treat a failed lookup as "revoked".** Only a *successful* empty result
+counts; a network error must not sign the user out.
+
+To react instantly rather than waiting out the access token, subscribe to
+postgres_changes DELETE on `devices` filtered to this install's **own row id**
+(`devices` is in the `supabase_realtime` publication). Filtering by own id
+matters: delete events carry only the primary key and are not RLS-filtered.
+
 ---
 
 ## Tech Stack
