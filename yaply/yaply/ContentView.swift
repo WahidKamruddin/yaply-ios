@@ -7,6 +7,9 @@ struct ContentView: View {
     @Environment(NotificationManager.self) private var notifications
     @AppStorage("appearanceMode") private var appearanceMode: AppearanceMode = .system
     @State private var suggestedUsername: String?
+    // Signs this install out the moment it's revoked from another device,
+    // rather than leaving it usable until its access token expires.
+    @State private var revocationWatcher = DeviceRevocationWatcher()
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -20,6 +23,8 @@ struct ContentView: View {
                         .task(id: userId) {
                             suggestedUsername = await UsernameSetupViewModel.needsSetup(userId: userId)
                         }
+                        .onAppear { revocationWatcher.start(userId: userId) }
+                        .onDisappear { revocationWatcher.stop() }
                         .fullScreenCover(isPresented: Binding(
                             get: { suggestedUsername != nil },
                             set: { if !$0 { suggestedUsername = nil } }

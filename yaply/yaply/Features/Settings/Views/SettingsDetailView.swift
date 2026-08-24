@@ -22,6 +22,7 @@ struct SettingsDetailView: View {
     private var content: some View {
         switch tab {
         case .account: AccountSettingsView(userId: userId, userEmail: userEmail)
+        case .devices: DeviceSettingsView(userId: userId)
         case .billing: BillingSettingsView()
         case .privacy: PrivacySettingsView()
         case .terms: TermsSettingsView()

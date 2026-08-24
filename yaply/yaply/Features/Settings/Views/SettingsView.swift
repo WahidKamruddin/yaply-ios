@@ -1,13 +1,14 @@
 import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
-    case account, billing, privacy, terms, help, report
+    case account, devices, billing, privacy, terms, help, report
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .account: return "Account"
+        case .devices: return "Devices"
         case .billing: return "Billing"
         case .privacy: return "Privacy Policy"
         case .terms: return "Terms of Service"
@@ -19,6 +20,7 @@ enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
     var icon: String {
         switch self {
         case .account: return "person"
+        case .devices: return "laptopcomputer.and.iphone"
         case .billing: return "creditcard"
         case .privacy: return "shield"
         case .terms: return "doc.text"

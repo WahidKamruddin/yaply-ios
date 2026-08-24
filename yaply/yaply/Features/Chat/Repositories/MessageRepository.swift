@@ -149,16 +149,28 @@ final class MessageRepository {
             .value
     }
 
-    // Fetches this device's envelope for a message by its key fingerprint. No row
-    // is a legitimate, permanent state (sealed before this device existed).
-    func fetchEnvelope(messageId: UUID, recipientFp: String) async throws -> MessageEnvelope? {
+    // Fetches an envelope this install can open. `candidateFps` is this device's
+    // own fingerprint plus any escrowed ones adopted via live pairing (see
+    // KeyStore.candidateFingerprints) — a message sealed before this device
+    // existed only has an envelope for an escrowed fingerprint, which is exactly
+    // what makes history readable after pairing. No row is a legitimate,
+    // permanent state, not an error.
+    func fetchEnvelope(messageId: UUID, candidateFps: [String]) async throws -> MessageEnvelope? {
+        guard !candidateFps.isEmpty else { return nil }
         let rows: [MessageEnvelope] = try await supabase
             .from("message_envelopes")
             .select("message_id, recipient_user_id, recipient_fp, eph_pub, key_iv, wrapped_key")
             .eq("message_id", value: messageId.uuidString)
-            .eq("recipient_fp", value: recipientFp)
+            .in("recipient_fp", values: candidateFps)
             .execute()
             .value
+        // A message can match more than one candidate (this device *and* an
+        // escrowed one both received envelopes). Prefer the earliest fingerprint
+        // in the list — candidateFingerprints puts this device's own key first,
+        // so we decrypt with the local key whenever that's an option.
+        for fp in candidateFps {
+            if let match = rows.first(where: { $0.recipientFp == fp }) { return match }
+        }
         return rows.first
     }
 

@@ -35,6 +35,14 @@ struct UpsertDeviceParams: Encodable {
     let identityKey: [String: String]
     let keyFingerprint: String
     let lastActiveAt: String
+    // The auth session this install signed in with, from the access token's
+    // `session_id` claim. Recorded so `revoke_device` can kill that session —
+    // without it, revoking can delete the row but not sign the device out.
+    let sessionId: String?
+    let platform: String
+    // Only sent on FIRST registration. Including it on every login would
+    // overwrite a name the user chose in Settings.
+    let deviceName: String?
 
     enum CodingKeys: String, CodingKey {
         case userId         = "user_id"
@@ -42,6 +50,48 @@ struct UpsertDeviceParams: Encodable {
         case identityKey    = "identity_key"
         case keyFingerprint = "key_fingerprint"
         case lastActiveAt   = "last_active_at"
+        case sessionId      = "session_id"
+        case platform
+        case deviceName     = "device_name"
+    }
+
+    // device_name is omitted entirely (not sent as null) when nil, so an upsert
+    // on an existing row leaves the stored name untouched.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(userId, forKey: .userId)
+        try c.encode(deviceId, forKey: .deviceId)
+        try c.encode(identityKey, forKey: .identityKey)
+        try c.encode(keyFingerprint, forKey: .keyFingerprint)
+        try c.encode(lastActiveAt, forKey: .lastActiveAt)
+        try c.encodeIfPresent(sessionId, forKey: .sessionId)
+        try c.encode(platform, forKey: .platform)
+        try c.encodeIfPresent(deviceName, forKey: .deviceName)
+    }
+}
+
+// A row as shown in Settings → Devices. Separate from DeviceRow (which exists
+// for the encryption path and only carries what key wrapping needs).
+struct ManagedDevice: Codable, Identifiable, Hashable {
+    let id: UUID
+    let deviceId: Int
+    var deviceName: String?
+    let platform: String?
+    let keyFingerprint: String?
+    let lastActiveAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case deviceId       = "device_id"
+        case deviceName     = "device_name"
+        case platform
+        case keyFingerprint = "key_fingerprint"
+        case lastActiveAt   = "last_active_at"
+    }
+
+    var displayName: String {
+        if let name = deviceName, !name.isEmpty { return name }
+        return "Device \(deviceId)"
     }
 }
 
