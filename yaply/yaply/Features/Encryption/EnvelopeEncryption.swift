@@ -53,20 +53,28 @@ enum EnvelopeEncryption {
         return (sealed.content, sealed.iv, envelopes)
     }
 
-    // Decrypts an enc_v=2 message for this device: fetches the envelope matching
-    // `myFingerprint`, unwraps the message key, then decrypts `content`. Returns
-    // nil on ANY failure (no envelope, bad wrap, bad content) — callers must treat
-    // nil as a permanent, honest decrypt failure and never fall back to another
-    // decode path.
+    // Decrypts an enc_v=2 message for this install: fetches an envelope sealed to
+    // any of this device's candidate fingerprints (its own key, or one adopted
+    // via live pairing), unwraps the message key with whichever private key that
+    // envelope names, then decrypts `content`. Returns nil on ANY failure (no
+    // envelope, bad wrap, bad content) — callers must treat nil as a permanent,
+    // honest decrypt failure and never fall back to another decode path.
     static func decryptV2(
         messageId: UUID,
         content: String,
         iv: String,
         repository: MessageRepository,
-        myPrivateKey: P256.KeyAgreement.PrivateKey,
-        myFingerprint: String
+        userId: UUID
     ) async -> String? {
-        guard let envelope = try? await repository.fetchEnvelope(messageId: messageId, recipientFp: myFingerprint) else {
+        let candidates = KeyStore.candidateFingerprints(forUser: userId)
+        // `try?` on an optional-returning throwing call flattens to one level,
+        // so this single binding covers both "query failed" and "no envelope".
+        guard let envelope = try? await repository.fetchEnvelope(messageId: messageId, candidateFps: candidates)
+        else { return nil }
+        // The envelope names the fingerprint it was sealed to, which may be this
+        // install's own device key or an escrowed one — pick the matching private
+        // key rather than assuming the own pair.
+        guard let privateKey = KeyStore.privateKey(forFingerprint: envelope.recipientFp, userId: userId) else {
             return nil
         }
         guard
@@ -75,7 +83,7 @@ enum EnvelopeEncryption {
                 ephPubJWK: ephPubJWK,
                 keyIv: envelope.keyIv,
                 wrappedKey: envelope.wrappedKey,
-                myPrivateKey: myPrivateKey
+                myPrivateKey: privateKey
             ),
             let plaintext = try? EncryptionService.decryptMessage(content: content, iv: iv, key: mk)
         else { return nil }

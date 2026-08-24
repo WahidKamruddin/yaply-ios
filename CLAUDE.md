@@ -86,13 +86,17 @@ this caused).
 
 ---
 
-## Live Device Pairing (contract — NOT YET IMPLEMENTED ON iOS)
+## Live Device Pairing (IMPLEMENTED)
 
-> Web shipped this; iOS has not. Until it does, an iOS install can only read
-> messages sealed after it registered its own device key.
+Files: `Features/Devices/DevicePairingCrypto.swift` (code/SAS/transfer payload),
+`Features/Devices/DevicePairingViewModel.swift` (channel + handshake),
+`Features/Devices/Views/DevicePairingView.swift`,
+`Views/PairingQRView.swift` (CoreImage), `Views/QRScannerView.swift`
+(AVFoundation). Escrow storage and candidate-fingerprint lookup live in
+`Features/Encryption/KeyStore.swift`.
 
 Because every install has its own identity keypair, a new device can't read
-older history. Web solves this with **live pairing**: an already-linked device
+older history. **Live pairing** solves it: an already-linked device
 (the *sender*) transfers its key material to a newly signed-in one (the
 *receiver*) over an ephemeral private Realtime channel. **Nothing is stored
 server-side** — there is no PIN, vault, or recovery blob, deliberately.
@@ -105,7 +109,7 @@ material** — it is small enough to type. **iOS is most often the sender to a
 desktop receiver, so the presenter-with-typed-code path is mandatory; never gate
 pairing behind the camera.**
 
-**Contract to reproduce byte-for-byte:**
+**Contract — must stay byte-identical with web:**
 - **Code:** 8 chars Crockford base32 (`0-9A-Z` minus I/L/O/U), displayed
   `XXXX-XXXX`. Parse leniently: case-insensitive, strip dashes/spaces, fold
   `O→0` and `I,L→1`. The code is a rendezvous identifier, **not a secret**.
@@ -154,26 +158,27 @@ secret server-side.
 
 ---
 
-## Device Management (contract — NOT YET IMPLEMENTED ON iOS)
+## Device Management (IMPLEMENTED)
 
-Settings → Devices on web lists, renames and revokes devices. iOS shares the
-same table and RPC, so it must follow the same rules.
+Settings → Devices (`Features/Devices/Views/DeviceSettingsView.swift`,
+`DeviceRepository.swift`, `DeviceRevocationWatcher.swift`,
+`DeviceName.swift`). Same table and RPC as web, same rules.
 
-**Naming.** Write `platform = 'ios'` and a generated `device_name` (e.g.
-`iPhone 15 (App)`) **only at first registration**. A later login must never
+**Naming.** `DeviceName.generate()` produces e.g. `iPhone (App)`; the registrar
+writes it and `platform = 'ios'` **only at first registration**. A later login must never
 re-write `device_name` — a device the user renamed would silently revert.
 
-**Session capture.** Record the access token's `session_id` claim on the
-`devices` row at registration. Without it, revoking that device can delete the
+**Session capture.** `EncryptionRegistrar` records the access token's
+`session_id` claim on the `devices` row at registration. Without it, revoking that device can delete the
 row but not its auth session, and the device stays signed in.
 
-**Revoking.** Call `revoke_device(p_device_id)` — never `DELETE` the row
-directly. A plain delete leaves the auth session alive, and the device would
+**Revoking.** `DeviceRepository.revoke` calls `revoke_device(p_device_id)` —
+never `DELETE` the row directly. A plain delete leaves the auth session alive, and the device would
 re-register on next launch. The RPC drops the row *and* the `auth.sessions` row
 (cascading `auth.refresh_tokens`).
 
-**Orphan check — mandatory.** At startup, if a locally stored `device_id` has no
-matching `devices` row, this install was revoked while offline: wipe **all**
+**Orphan check — mandatory.** `EncryptionRegistrar.register` runs it at startup:
+if a locally stored `device_id` has no matching `devices` row, this install was revoked while offline: wipe **all**
 local keys (identity *and* adopted pairing keys) and register as a brand-new
 device. Without this step a revoked device republishes its old identity from
 local storage and silently undoes the revocation. It is also what forces the
@@ -182,10 +187,12 @@ user to pair again to see history — the intended outcome.
 **Never treat a failed lookup as "revoked".** Only a *successful* empty result
 counts; a network error must not sign the user out.
 
-To react instantly rather than waiting out the access token, subscribe to
+`DeviceRevocationWatcher` (started from `ContentView`) subscribes to
 postgres_changes DELETE on `devices` filtered to this install's **own row id**
-(`devices` is in the `supabase_realtime` publication). Filtering by own id
-matters: delete events carry only the primary key and are not RLS-filtered.
+(`devices` is in the `supabase_realtime` publication), and re-checks on
+`willEnterForeground` for the case where the app was suspended through the
+event. Filtering by own id matters: delete events carry only the primary key and
+are not RLS-filtered.
 
 ---
 

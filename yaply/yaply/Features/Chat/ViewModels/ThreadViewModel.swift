@@ -16,7 +16,6 @@ final class ThreadViewModel {
     private let currentUserId: UUID
     private let repository = MessageRepository()
     private var realtimeTask: Task<Void, Never>?
-    private var identityPrivKeyCache: P256.KeyAgreement.PrivateKey?
     // Loaded lazily from the parent conversation on first send/decrypt.
     private var memberUserIds: [UUID]?
 
@@ -145,11 +144,12 @@ final class ThreadViewModel {
             // device that hasn't finished registering yet must get the chance to
             // before this is reported as a decrypt failure.
             try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
-            guard let privKey = loadedIdentityPrivateKey() else { return ("", true) }
+            // No own-key guard here: an escrowed key adopted via pairing can
+            // open envelopes this device's own key never could, so the candidate
+            // lookup inside decryptV2 decides — not the presence of a local pair.
             guard let plaintext = await EnvelopeEncryption.decryptV2(
                 messageId: msg.id, content: msg.content, iv: iv,
-                repository: repository, myPrivateKey: privKey,
-                myFingerprint: EncryptionService.fingerprint(for: privKey.publicKey)
+                repository: repository, userId: currentUserId
             ) else { return ("", true) }
             return (plaintext, false)
         } else if msg.encV == nil && msg.iv == nil {
@@ -159,10 +159,4 @@ final class ThreadViewModel {
         }
     }
 
-    private func loadedIdentityPrivateKey() -> P256.KeyAgreement.PrivateKey? {
-        if let cached = identityPrivKeyCache { return cached }
-        let key = try? KeyStore.loadIdentityKeyPair()
-        identityPrivKeyCache = key
-        return key
-    }
 }
