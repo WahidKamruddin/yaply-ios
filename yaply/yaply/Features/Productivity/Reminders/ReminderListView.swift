@@ -78,45 +78,38 @@ struct ReminderListView: View {
             guard (notif.userInfo?["type"] as? String) == "reminders" else { return }
             Task { await load() }
         }
-        .sheet(item: $reminderToEditTime) { reminder in
-            NavigationStack {
-                Form {
-                    DatePicker("Remind at", selection: $editRemindAt, displayedComponents: [.date, .hourAndMinute])
+        .yaplyPopup(item: $reminderToEditTime) { reminder in
+            YaplySheetScaffold(
+                title: "Edit reminder time",
+                primaryLabel: "Save",
+                primaryAction: {
+                    reminderToEditTime = nil
+                    Task {
+                        try? await repo.updateRemindAt(reminderId: reminder.id, remindAt: editRemindAt)
+                        await load()
+                    }
                 }
-                .navigationTitle("Edit Reminder Time")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { reminderToEditTime = nil }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Save") {
-                            Task {
-                                try? await repo.updateRemindAt(reminderId: reminder.id, remindAt: editRemindAt)
-                                reminderToEditTime = nil
-                                await load()
-                            }
-                        }
-                    }
+            ) {
+                YaplyLabeledField(label: "Remind at") {
+                    DatePicker("", selection: $editRemindAt, displayedComponents: [.date, .hourAndMinute])
+                        .labelsHidden()
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .presentationDetents([.medium])
         }
-        .alert("Dismiss Reminder", isPresented: Binding(
-            get: { reminderToDismiss != nil },
-            set: { if !$0 { reminderToDismiss = nil } }
-        )) {
-            Button("Dismiss", role: .destructive) {
-                guard let r = reminderToDismiss else { return }
-                reminderToDismiss = nil
-                Task {
-                    try? await repo.dismissReminder(id: r.id)
-                    reminders.removeAll { $0.id == r.id }
-                }
+        .yaplyConfirm(
+            isPresented: Binding(get: { reminderToDismiss != nil }, set: { if !$0 { reminderToDismiss = nil } }),
+            title: "Dismiss reminder",
+            message: "Dismiss \"\(reminderToDismiss?.message ?? "")\"?",
+            icon: "bell.slash.fill",
+            confirmLabel: "Dismiss"
+        ) {
+            guard let r = reminderToDismiss else { return }
+            reminderToDismiss = nil
+            Task {
+                try? await repo.dismissReminder(id: r.id)
+                reminders.removeAll { $0.id == r.id }
             }
-            Button("Cancel", role: .cancel) { reminderToDismiss = nil }
-        } message: {
-            Text("Dismiss \"\(reminderToDismiss?.message ?? "")\"?")
         }
     }
 

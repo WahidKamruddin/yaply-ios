@@ -93,6 +93,8 @@ struct AvatarView: View {
                 switch phase {
                 case .success(let image):
                     image.resizable().scaledToFill()
+                case .empty:
+                    placeholderAvatar
                 default:
                     fallbackAvatar
                 }
@@ -102,6 +104,18 @@ struct AvatarView: View {
         } else {
             fallbackAvatar
         }
+    }
+
+    // Neutral silhouette shown while the profile photo is still loading.
+    private var placeholderAvatar: some View {
+        Circle()
+            .fill(Color.yaplyTint)
+            .frame(width: size, height: size)
+            .overlay(
+                Image(systemName: "person.fill")
+                    .font(.system(size: size * 0.5))
+                    .foregroundStyle(Color.yaplySecondary)
+            )
     }
 
     private var fallbackAvatar: some View {

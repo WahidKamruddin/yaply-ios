@@ -6,7 +6,6 @@ struct Profile: Codable, Identifiable, Hashable {
     var displayName: String?
     var avatarUrl: String?
     var bio: String?
-    var publicKey: String?
     var isOnline: Bool
     var lastSeenAt: Date?
     let createdAt: Date
@@ -21,7 +20,6 @@ struct Profile: Codable, Identifiable, Hashable {
         case id, username, bio
         case displayName  = "display_name"
         case avatarUrl    = "avatar_url"
-        case publicKey    = "public_key"
         case isOnline     = "is_online"
         case lastSeenAt   = "last_seen_at"
         case createdAt    = "created_at"

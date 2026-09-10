@@ -77,30 +77,29 @@ struct ProfileView: View {
                 }
             }
             .task { await vm.load(userId: userId, viewerId: viewerId) }
-            .alert("Remove Friend", isPresented: $showUnfriendConfirm) {
-                Button("Remove", role: .destructive) {
-                    Task { await vm.removeFriendship(viewerId: viewerId) }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Remove \(vm.profile?.name ?? "this person") from your friends?")
+            .yaplyConfirm(
+                isPresented: $showUnfriendConfirm,
+                title: "Remove friend",
+                message: "Remove \(vm.profile?.name ?? "this person") from your friends?",
+                icon: "person.badge.minus",
+                confirmLabel: "Remove"
+            ) {
+                Task { await vm.removeFriendship(viewerId: viewerId) }
             }
-            .alert("Block User", isPresented: $showBlockConfirm) {
-                Button("Block", role: .destructive) {
-                    Task { await vm.block(viewerId: viewerId) }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("\(vm.profile?.name ?? "This person") won't be able to message you or see your profile.")
+            .yaplyConfirm(
+                isPresented: $showBlockConfirm,
+                title: "Block user",
+                message: "\(vm.profile?.name ?? "This person") won't be able to message you or see your profile.",
+                icon: "hand.raised.fill",
+                confirmLabel: "Block"
+            ) {
+                Task { await vm.block(viewerId: viewerId) }
             }
-            .alert("Error", isPresented: Binding(
-                get: { vm.actionError != nil },
-                set: { if !$0 { vm.actionError = nil } }
-            )) {
-                Button("OK", role: .cancel) { vm.actionError = nil }
-            } message: {
-                Text(vm.actionError ?? "")
-            }
+            .yaplyAlert(
+                isPresented: Binding(get: { vm.actionError != nil }, set: { if !$0 { vm.actionError = nil } }),
+                title: "Something went wrong",
+                message: vm.actionError ?? ""
+            )
             .onChange(of: navigateToConversationId) { _, id in
                 guard let id else { return }
                 dismiss()

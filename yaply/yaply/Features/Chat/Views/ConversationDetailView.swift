@@ -11,7 +11,6 @@ struct ConversationDetailView: View {
     }
 
     @State private var selectedTab: String = "reminders"
-    @Environment(\.dismiss) private var dismiss
 
     private let primaryTabs: [(id: String, label: String, icon: String)] = [
         ("reminders", "Reminders", "bell"),
@@ -34,18 +33,11 @@ struct ConversationDetailView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                tabBar
-                contentView
-            }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Done") { dismiss() }
-                        .foregroundStyle(Color.yaplyAccent)
-                }
-            }
+        VStack(spacing: 0) {
+            tabBar
+            contentView
         }
+        .navigationBarTitleDisplayMode(.inline)
         .onAppear { selectedTab = initialTab }
     }
 

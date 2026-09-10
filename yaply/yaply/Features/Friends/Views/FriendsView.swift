@@ -57,36 +57,33 @@ struct FriendsView: View {
         )) { wrapped in
             ProfileView(userId: wrapped.id, viewerId: currentUserId)
         }
-        .alert("Remove Friend", isPresented: Binding(
-            get: { friendshipToRemove != nil },
-            set: { if !$0 { friendshipToRemove = nil } }
-        ), presenting: friendshipToRemove) { friend in
-            Button("Remove", role: .destructive) {
-                Task { await vm.removeFriendship(friend.friendshipId, me: currentUserId) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { friend in
-            Text("Remove \(friend.profile.name) from your friends?")
+        .yaplyConfirm(
+            isPresented: Binding(get: { friendshipToRemove != nil }, set: { if !$0 { friendshipToRemove = nil } }),
+            title: "Remove friend",
+            message: "Remove \(friendshipToRemove?.profile.name ?? "this person") from your friends?",
+            icon: "person.badge.minus",
+            confirmLabel: "Remove"
+        ) {
+            guard let friend = friendshipToRemove else { return }
+            friendshipToRemove = nil
+            Task { await vm.removeFriendship(friend.friendshipId, me: currentUserId) }
         }
-        .alert("Block User", isPresented: Binding(
-            get: { friendToBlock != nil },
-            set: { if !$0 { friendToBlock = nil } }
-        ), presenting: friendToBlock) { friend in
-            Button("Block", role: .destructive) {
-                Task { await vm.block(friend.profile.id, me: currentUserId) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { friend in
-            Text("\(friend.profile.name) won't be able to message you or see your profile.")
+        .yaplyConfirm(
+            isPresented: Binding(get: { friendToBlock != nil }, set: { if !$0 { friendToBlock = nil } }),
+            title: "Block user",
+            message: "\(friendToBlock?.profile.name ?? "This person") won't be able to message you or see your profile.",
+            icon: "hand.raised.fill",
+            confirmLabel: "Block"
+        ) {
+            guard let friend = friendToBlock else { return }
+            friendToBlock = nil
+            Task { await vm.block(friend.profile.id, me: currentUserId) }
         }
-        .alert("Error", isPresented: Binding(
-            get: { vm.error != nil },
-            set: { if !$0 { vm.error = nil } }
-        )) {
-            Button("OK", role: .cancel) { vm.error = nil }
-        } message: {
-            Text(vm.error ?? "")
-        }
+        .yaplyAlert(
+            isPresented: Binding(get: { vm.error != nil }, set: { if !$0 { vm.error = nil } }),
+            title: "Something went wrong",
+            message: vm.error ?? ""
+        )
     }
 
     // MARK: - Tab picker

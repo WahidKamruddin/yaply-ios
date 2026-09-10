@@ -62,7 +62,7 @@ struct YaplyEventRsvp: Codable, Identifiable {
 
 // Events schema: events(id, conversation_id, created_by, name, description, location, status, starts_at, ends_at, created_at, updated_at)
 // status: 'planning' (when2meet mode) | 'confirmed' (date locked)
-struct YaplyEvent: Codable, Identifiable {
+struct YaplyEvent: Codable, Identifiable, Hashable {
     let id: UUID
     let conversationId: UUID
     let createdBy: UUID

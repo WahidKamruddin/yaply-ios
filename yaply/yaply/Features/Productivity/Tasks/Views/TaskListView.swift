@@ -86,73 +86,63 @@ struct TaskListView: View {
             guard (notif.userInfo?["type"] as? String) == "tasks" else { return }
             Task { await load() }
         }
-        .sheet(isPresented: $showAdd) {
+        .yaplyPopup(isPresented: $showAdd) {
             addTaskSheet
         }
-        .sheet(item: $taskToEditDueDate) { task in
-            NavigationStack {
-                Form {
-                    DatePicker("Due date", selection: $editDueDate, displayedComponents: [.date, .hourAndMinute])
+        .yaplyPopup(item: $taskToEditDueDate) { task in
+            YaplySheetScaffold(
+                title: "Edit due date",
+                primaryLabel: "Save",
+                primaryAction: {
+                    taskToEditDueDate = nil
+                    Task {
+                        try? await repo.updateDueDate(taskId: task.id, dueAt: editDueDate)
+                        await load()
+                    }
                 }
-                .navigationTitle("Edit Due Date")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { taskToEditDueDate = nil }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Save") {
-                            Task {
-                                try? await repo.updateDueDate(taskId: task.id, dueAt: editDueDate)
-                                taskToEditDueDate = nil
-                                await load()
-                            }
-                        }
-                    }
+            ) {
+                YaplyLabeledField(label: "Due date") {
+                    DatePicker("", selection: $editDueDate, displayedComponents: [.date, .hourAndMinute])
+                        .labelsHidden()
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .presentationDetents([.medium])
         }
-        .alert("Delete Task", isPresented: Binding(
-            get: { taskToDelete != nil },
-            set: { if !$0 { taskToDelete = nil } }
-        )) {
-            Button("Delete", role: .destructive) {
-                guard let t = taskToDelete else { return }
-                taskToDelete = nil
-                Task {
-                    try? await repo.deleteTask(id: t.id)
-                    tasks.removeAll { $0.id == t.id }
-                }
+        .yaplyConfirm(
+            isPresented: Binding(get: { taskToDelete != nil }, set: { if !$0 { taskToDelete = nil } }),
+            title: "Delete task",
+            message: "\"\(taskToDelete?.title ?? "")\" will be permanently deleted. This cannot be undone.",
+            icon: "trash.fill",
+            confirmLabel: "Delete"
+        ) {
+            guard let t = taskToDelete else { return }
+            taskToDelete = nil
+            Task {
+                try? await repo.deleteTask(id: t.id)
+                tasks.removeAll { $0.id == t.id }
             }
-            Button("Cancel", role: .cancel) { taskToDelete = nil }
-        } message: {
-            Text("\"\(taskToDelete?.title ?? "")\" will be permanently deleted. This cannot be undone.")
         }
     }
 
     private var addTaskSheet: some View {
-        NavigationStack {
-            Form {
-                TextField("Task title", text: $newTaskTitle)
+        YaplySheetScaffold(
+            title: "New task",
+            primaryLabel: "Add",
+            primaryEnabled: !newTaskTitle.isBlank,
+            primaryAction: {
+                guard !newTaskTitle.isBlank else { return }
+                let title = newTaskTitle
+                newTaskTitle = ""
+                showAdd = false
+                Task {
+                    try? await repo.createTask(conversationId: conversationId, createdBy: currentUserId, title: title)
+                    await load()
+                }
             }
-            .navigationTitle("New Task")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showAdd = false }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
-                        guard !newTaskTitle.isBlank else { return }
-                        Task {
-                            try? await repo.createTask(conversationId: conversationId, createdBy: currentUserId, title: newTaskTitle)
-                            newTaskTitle = ""
-                            showAdd = false
-                            await load()
-                        }
-                    }
-                }
+        ) {
+            YaplyLabeledField(label: "Task title") {
+                TextField("What needs doing?", text: $newTaskTitle)
+                    .yaplyInputStyle()
             }
         }
     }
@@ -220,13 +210,9 @@ private struct TaskRowView: View {
             }
         }
         .padding(.vertical, 4)
-        .sheet(isPresented: $showEditDueDate) {
-            dueDateSheet
+        .yaplyPopup(isPresented: $showEditDueDate) {
+            EditDueDateSheet(task: task, onSave: { _ in showEditDueDate = false })
         }
-    }
-
-    private var dueDateSheet: some View {
-        EditDueDateSheet(task: task, onSave: { _ in showEditDueDate = false })
     }
 
     private var priorityColor: Color {
@@ -242,7 +228,7 @@ private struct EditDueDateSheet: View {
     let task: YaplyTask
     let onSave: (Date) -> Void
     @State private var date: Date
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.yaplyPopupDismiss) private var dismiss
     private let repo = TaskRepository()
 
     init(task: YaplyTask, onSave: @escaping (Date) -> Void) {
@@ -252,27 +238,22 @@ private struct EditDueDateSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                DatePicker("Due date", selection: $date, displayedComponents: [.date, .hourAndMinute])
+        YaplySheetScaffold(
+            title: "Edit due date",
+            primaryLabel: "Save",
+            primaryAction: {
+                dismiss()
+                Task {
+                    try? await repo.updateDueDate(taskId: task.id, dueAt: date)
+                    onSave(date)
+                }
             }
-            .navigationTitle("Edit Due Date")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        Task {
-                            try? await repo.updateDueDate(taskId: task.id, dueAt: date)
-                            onSave(date)
-                            dismiss()
-                        }
-                    }
-                }
+        ) {
+            YaplyLabeledField(label: "Due date") {
+                DatePicker("", selection: $date, displayedComponents: [.date, .hourAndMinute])
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .presentationDetents([.medium])
     }
 }

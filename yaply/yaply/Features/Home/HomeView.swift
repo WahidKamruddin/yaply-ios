@@ -11,23 +11,8 @@ struct HomeView: View {
     @State private var vm = HomeViewModel()
     @State private var creating: DashboardCreateType?
 
-    private var friends: [(userId: UUID, profile: Profile)] {
-        var seen: [UUID: Profile] = [:]
-        var order: [UUID] = []
-        for conv in conversations where !conv.isGroup {
-            guard let other = conv.otherMember(currentUserId: currentUserId), seen[other.userId] == nil else { continue }
-            seen[other.userId] = other.profile
-            order.append(other.userId)
-        }
-        return order.compactMap { id in seen[id].map { (id, $0) } }
-    }
-
     private func conversationLabel(_ conversationId: UUID) -> String {
         conversations.first(where: { $0.id == conversationId })?.displayName(currentUserId: currentUserId) ?? "Unknown chat"
-    }
-
-    private func directConversation(for userId: UUID) -> UUID? {
-        conversations.first(where: { !$0.isGroup && $0.otherMember(currentUserId: currentUserId)?.userId == userId })?.id
     }
 
     var body: some View {
@@ -187,19 +172,27 @@ struct HomeView: View {
 
     private var friendsCard: some View {
         cardShell(icon: "person.2.fill", title: "Friends") {
-            if isLoadingConversations {
+            if vm.isLoading && vm.friends.isEmpty {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
                     ForEach(0..<6, id: \.self) { i in
                         DashboardFriendSkeleton(delay: Double(i) * 0.06)
                     }
                 }
-            } else if friends.isEmpty {
-                emptyRow("Start a direct message to see friends here")
+            } else if vm.friends.isEmpty {
+                emptyRow("Add friends to see them here")
             } else {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
-                    ForEach(friends, id: \.userId) { friend in
+                    ForEach(vm.friends) { friend in
                         Button {
-                            if let cid = directConversation(for: friend.userId) { onOpenConversation(cid) }
+                            Task {
+                                if let cid = await vm.directConversationId(
+                                    for: friend.profile.id,
+                                    currentUserId: currentUserId,
+                                    existing: conversations
+                                ) {
+                                    onOpenConversation(cid)
+                                }
+                            }
                         } label: {
                             HStack(spacing: 8) {
                                 AvatarView(url: friend.profile.avatarUrl, name: friend.profile.name, size: 28)
