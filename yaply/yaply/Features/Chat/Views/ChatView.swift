@@ -29,9 +29,9 @@ struct ChatView: View {
     @State private var showHelp = false
     @State private var isDropTargeted = false
     @State private var actionsMessage: DecryptedMessage?
-    @State private var actionsAnchorY: CGFloat = 300
+    @State private var actionsAnchorRect: CGRect = .zero
     @State private var messageToDelete: UUID?
-    @State private var bubbleAnchors: [UUID: CGFloat] = [:]
+    @State private var bubbleAnchors: [UUID: CGRect] = [:]
     @Environment(AppRouter.self) private var router
 
     private let convRepository = ConversationRepository()
@@ -139,19 +139,12 @@ struct ChatView: View {
                                         onQuotationClick: { id in scrollToId = id },
                                         onOpenDetail: { openPanel($0) },
                                         onLongPress: { m in
-                                            actionsAnchorY = bubbleAnchors[m.id] ?? 300
+                                            actionsAnchorRect = bubbleAnchors[m.id] ?? .zero
                                             actionsMessage = m
                                         },
                                         swipeOffset: swipeOffset
                                     )
-                                    .background(
-                                        GeometryReader { g in
-                                            Color.clear.preference(
-                                                key: BubbleAnchorKey.self,
-                                                value: [msg.id: g.frame(in: .global).midY]
-                                            )
-                                        }
-                                    )
+                                    .opacity(actionsMessage?.id == msg.id ? 0 : 1)
                                     .id(msg.id)
                                     .background(highlightedId == msg.id ? Color.yaplyAccent.opacity(0.12) : Color.clear)
                                     .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -372,7 +365,7 @@ struct ChatView: View {
                     myReaction: vm.myReaction(for: m.id),
                     isPinned: vm.isPinned(m.id),
                     canDelete: m.senderId == currentUserId,
-                    anchorY: actionsAnchorY,
+                    anchorRect: actionsAnchorRect,
                     onReact: { emoji in vm.setReaction(messageId: m.id, emoji: emoji) },
                     onReply: { vm.replyToMessage = m },
                     onCopy: {
@@ -745,8 +738,8 @@ private struct HelpView: View {
 // MARK: - Bubble anchor tracking (for the long-press actions overlay)
 
 struct BubbleAnchorKey: PreferenceKey {
-    static let defaultValue: [UUID: CGFloat] = [:]
-    static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
+    static let defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
         value.merge(nextValue()) { _, new in new }
     }
 }
