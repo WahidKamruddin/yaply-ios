@@ -1,6 +1,0 @@
-// Copy this file to Config.xcconfig and fill in your values.
-// Config.xcconfig is gitignored — never commit real keys.
-
-SUPABASE_URL = https:/$()/qgbgrpsfvpglaryldbij.supabase.co
-SUPABASE_ANON_KEY = sb_publishable_wplR-rFxtHwmb4AIRhjTVw_DnQgzGk0
-GIPHY_API_KEY = your-giphy-key
