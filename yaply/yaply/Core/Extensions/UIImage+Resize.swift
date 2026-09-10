@@ -10,4 +10,16 @@ extension UIImage {
             draw(in: CGRect(origin: .zero, size: newSize))
         }
     }
+
+    /// True when the image has an alpha channel — used to tell a transparent
+    /// sticker apart from an opaque photo on paste / drop.
+    var hasAlpha: Bool {
+        guard let alpha = cgImage?.alphaInfo else { return false }
+        switch alpha {
+        case .first, .last, .premultipliedFirst, .premultipliedLast:
+            return true
+        default:
+            return false
+        }
+    }
 }

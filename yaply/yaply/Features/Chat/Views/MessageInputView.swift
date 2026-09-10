@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 struct MessageInputView: View {
     @Binding var text: String
@@ -9,8 +11,11 @@ struct MessageInputView: View {
     let disabled: Bool
     var onTyping: (() -> Void)? = nil
     var onStopTyping: (() -> Void)? = nil
+    /// A sticker/image pasted from the clipboard (e.g. a sticker copied in Messages).
+    var onPasteImage: ((UIImage) -> Void)? = nil
 
     @State private var showCommandPalette = false
+    @State private var canPasteImage = false
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -65,6 +70,20 @@ struct MessageInputView: View {
                 }
                 .disabled(disabled)
 
+                if canPasteImage, let onPasteImage {
+                    PasteButton(supportedContentTypes: [.image]) { providers in
+                        guard let provider = providers.first(where: { $0.canLoadObject(ofClass: UIImage.self) }) else { return }
+                        _ = provider.loadObject(ofClass: UIImage.self) { object, _ in
+                            guard let image = object as? UIImage else { return }
+                            DispatchQueue.main.async { onPasteImage(image) }
+                        }
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonBorderShape(.capsule)
+                    .tint(Color.yaplyAccent)
+                    .disabled(disabled)
+                }
+
                 HStack(alignment: .bottom) {
                     TextField("Message...", text: $text, axis: .vertical)
                         .lineLimit(1...6)
@@ -107,6 +126,13 @@ struct MessageInputView: View {
             .padding(.vertical, 10)
             .background(Color.yaplySurface)
             .overlay(Rectangle().fill(Color.yaplyBorder).frame(height: 1), alignment: .top)
+        }
+        .onAppear { canPasteImage = UIPasteboard.general.hasImages }
+        .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
+            canPasteImage = UIPasteboard.general.hasImages
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            canPasteImage = UIPasteboard.general.hasImages
         }
     }
 
