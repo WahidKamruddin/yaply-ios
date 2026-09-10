@@ -542,6 +542,43 @@ Implemented — `Features/Friends/`: `Repositories/FriendsRepository.swift` (all
 
 ---
 
+## Media: GIFs & Stickers
+
+Paperclip → `MediaPickerView` (Photos + GIFs tabs). Photos compress to JPEG and
+send `type:"image"`; GIFs send `type:"gif"` with the Giphy URL (hot-linked, not
+re-hosted). All media is a plain `MessageRepository.sendMessage` insert —
+`content:"" , iv:nil`, `enc_v` NULL — **never** the envelope RPC (media is not
+E2E encrypted, matching web).
+
+**Animated playback:** `MessageBubbleView` renders `gif`/`sticker` via Kingfisher
+`KFAnimatedImage` (real animation + disk cache); still images via `KFImage`.
+`GifPickerView` grid previews also use `KFAnimatedImage`. Requires
+`GIPHY_API_KEY` in `Config.xcconfig`.
+
+**Stickers — no yaply sticker library.** There is no `stickers` table, no creator,
+no picker tab. The user inserts a sticker that already exists on the device
+(system Stickers drawer, Memoji, Markup, iOS 18 Genmoji):
+- **Drag & drop** onto the conversation — `ChatView.onDrop(of: [.image])` →
+  `handleDroppedProviders`. A "Drop to send" overlay shows while targeted.
+- **Paste** — `MessageInputView` shows a `PasteButton` (next to the paperclip)
+  when `UIPasteboard.general.hasImages`; wired to `onPasteImage`.
+- **Sticker vs photo:** `UIImage.hasAlpha` → transparent means sticker
+  (`ChatViewModel.sendStickerMessage`, PNG to `media` bucket, `type:"sticker"`,
+  `media_mime:"image/png"`, dimension-capped 512px); opaque means photo
+  (`sendImageMessage`).
+- **Rendering:** `type:"sticker"` renders bubble-free — no background, no border,
+  ~150pt, drop shadow, `StickerPopIn` spring entrance. Reply previews show
+  "Sticker" / "GIF" / "📷 Photo" by type.
+- `MediaUploadService.uploadImage` gained an `ext` param so a sticker keeps its
+  `.png` extension.
+
+**Not built:** iOS 18 inline keyboard sticker/Genmoji insertion (would require
+replacing the `TextField` in `MessageInputView` with a `UITextView`
+representable, `supportsAdaptiveImageGlyph = true`, and walking
+`NSAdaptiveImageGlyph` runs on send). Drop + paste cover iOS 17.
+
+---
+
 ## Known Issues to Fix
 
 Issues identified from code review (most severe first):

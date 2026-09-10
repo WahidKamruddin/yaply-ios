@@ -1,4 +1,5 @@
 import SwiftUI
+import Kingfisher
 
 private let quickEmojis = ["👍", "❤️", "😂", "😮", "😢", "🎉"]
 
@@ -147,12 +148,13 @@ struct MessageBubbleView: View {
                                 }
                             }
                         }
-                        .alert("Delete Message", isPresented: $showDeleteConfirmation) {
-                            Button("Delete", role: .destructive) { onDelete(message.id) }
-                            Button("Cancel", role: .cancel) { }
-                        } message: {
-                            Text("This will delete the message for everyone.")
-                        }
+                        .yaplyConfirm(
+                            isPresented: $showDeleteConfirmation,
+                            title: "Delete message",
+                            message: "This will delete the message for everyone.",
+                            icon: "trash.fill",
+                            confirmLabel: "Delete"
+                        ) { onDelete(message.id) }
 
                     if !reactions.isEmpty {
                         reactionPills
@@ -284,25 +286,45 @@ struct MessageBubbleView: View {
             .background(Color.yaplyCard)
             .clipShape(BubbleShape(isOwn: isOwn))
             .overlay(BubbleShape(isOwn: isOwn).stroke(Color.yaplyBorderSoft, lineWidth: 1))
-        } else if message.isMedia, let urlString = message.mediaUrl, let url = URL(string: urlString) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let img):
-                    img.resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: 220)
-                        .clipShape(BubbleShape(isOwn: isOwn))
-                        .shadow(color: Color.yaplyShadow, radius: 2, y: 1)
-                case .failure:
-                    mediaPill(systemImage: "photo", label: "Image unavailable")
-                default:
-                    ZStack {
-                        BubbleShape(isOwn: isOwn).fill(Color.yaplyBackground)
-                        ProgressView().tint(Color.yaplyAccent)
-                    }
-                    .frame(width: 220, height: 140)
+        } else if message.type == "sticker" {
+            // Stickers float free — no bubble, no border, larger, with a little pop.
+            Group {
+                if let url = message.mediaUrl.flatMap(URL.init) {
+                    KFAnimatedImage(url)
+                        .configure { $0.contentMode = .scaleAspectFit }
+                        .placeholder {
+                            ProgressView().tint(Color.yaplyAccent).frame(width: 120, height: 120)
+                        }
+                        .fade(duration: 0.15)
+                        .frame(maxWidth: 150, maxHeight: 150)
+                        .shadow(color: Color.yaplyShadow, radius: 3, y: 2)
+                } else {
+                    // Optimistic row while the PNG uploads.
+                    ProgressView().tint(Color.yaplyAccent).frame(width: 120, height: 120)
                 }
             }
+            .modifier(StickerPopIn())
+        } else if message.type == "gif", let urlString = message.mediaUrl, let url = URL(string: urlString) {
+            // No bubble — a plain rounded card that hugs the GIF, matching the web app.
+            AnimatedGifView(url: url)
+        } else if message.isMedia, let urlString = message.mediaUrl, let url = URL(string: urlString) {
+            // No bubble — a plain rounded card, matching the web app.
+            KFImage(url)
+                .placeholder {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14).fill(Color.yaplyBackground)
+                        ProgressView().tint(Color.yaplyAccent)
+                    }
+                    .frame(width: 200, height: 140)
+                }
+                .onFailureView {
+                    mediaPill(systemImage: "photo", label: "Image unavailable")
+                }
+                .fade(duration: 0.15)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: 240, maxHeight: 300)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
         } else {
             Text(message.content)
                 .font(.system(size: 15))
@@ -346,7 +368,7 @@ struct MessageBubbleView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.yaplyAccent)
                         .lineLimit(1)
-                    Text(reply.isDeleted ? "Message deleted" : reply.isMedia ? "📷 Photo" : String(reply.content.prefix(60)))
+                    Text(replyPreview(reply))
                         .font(.system(size: 12))
                         .italic(reply.isDeleted)
                         .foregroundStyle(reply.isDeleted ? Color.yaplySecondary.opacity(0.7) : Color.yaplySecondary)
@@ -363,6 +385,16 @@ struct MessageBubbleView: View {
         .buttonStyle(.plain)
     }
 
+    private func replyPreview(_ reply: DecryptedMessage) -> String {
+        if reply.isDeleted { return "Message deleted" }
+        switch reply.type {
+        case "sticker": return "Sticker"
+        case "gif": return "GIF"
+        case "image": return "📷 Photo"
+        default: return String(reply.content.prefix(60))
+        }
+    }
+
     private func mediaPill(systemImage: String, label: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: systemImage).foregroundStyle(Color.yaplySecondary)
@@ -373,6 +405,53 @@ struct MessageBubbleView: View {
         .background(Color.yaplyBackground)
         .clipShape(BubbleShape(isOwn: isOwn))
         .overlay(BubbleShape(isOwn: isOwn).stroke(Color.yaplyBorder, lineWidth: 1))
+    }
+}
+
+// MARK: - Animated GIF
+
+/// A bubble-free animated GIF that sizes to the GIF's own aspect ratio (like the
+/// web app's `object-contain` img), capped at 240×300, with rounded corners that
+/// hug the content instead of a fixed letterboxed box.
+private struct AnimatedGifView: View {
+    let url: URL
+    @State private var aspect: CGFloat?
+
+    var body: some View {
+        KFAnimatedImage(url)
+            .configure { $0.contentMode = .scaleAspectFill }
+            .onSuccess { result in
+                let s = result.image.size
+                if s.width > 0, s.height > 0 { aspect = s.width / s.height }
+            }
+            .placeholder {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14).fill(Color.yaplyBackground)
+                    ProgressView().tint(Color.yaplyAccent)
+                }
+                .frame(width: 180, height: 140)
+            }
+            .fade(duration: 0.15)
+            .aspectRatio(aspect ?? 1, contentMode: .fit)
+            .frame(maxWidth: 240, maxHeight: 300)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+// MARK: - Sticker pop-in
+
+/// iMessage-style scale/spring entrance the first time a sticker bubble appears.
+private struct StickerPopIn: ViewModifier {
+    @State private var shown = false
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(shown ? 1 : 0.6)
+            .opacity(shown ? 1 : 0)
+            .onAppear {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
+                    shown = true
+                }
+            }
     }
 }
 

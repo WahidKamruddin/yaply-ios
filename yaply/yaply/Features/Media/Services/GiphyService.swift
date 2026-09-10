@@ -35,14 +35,22 @@ struct GiphyGif: Identifiable, Decodable {
 final class GiphyService {
     private let apiKey: String
 
+    /// Placeholder values shipped in `Config.xcconfig.example` — treated as unset,
+    /// mirroring the web app's `hasGiphyKey`.
+    private static let placeholders: Set<String> = ["your-giphy-key", "your-giphy-api-key", ""]
+
+    /// True only when a real key is configured — drives the picker's config hint.
+    var hasKey: Bool { !Self.placeholders.contains(apiKey) }
+
     init() {
-        apiKey = Bundle.main.object(forInfoDictionaryKey: "GIPHY_API_KEY") as? String
+        let raw = Bundle.main.object(forInfoDictionaryKey: "GIPHY_API_KEY") as? String
             ?? ProcessInfo.processInfo.environment["GIPHY_API_KEY"]
             ?? ""
+        apiKey = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func search(query: String, offset: Int = 0) async throws -> [GiphyGif] {
-        guard !query.isBlank, !apiKey.isEmpty else { return [] }
+        guard !query.isBlank, hasKey else { return [] }
 
         var components = URLComponents(string: "https://api.giphy.com/v1/gifs/search")!
         components.queryItems = [
@@ -59,7 +67,7 @@ final class GiphyService {
     }
 
     func trending() async throws -> [GiphyGif] {
-        guard !apiKey.isEmpty else { return [] }
+        guard hasKey else { return [] }
 
         var components = URLComponents(string: "https://api.giphy.com/v1/gifs/trending")!
         components.queryItems = [

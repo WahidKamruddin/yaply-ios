@@ -5,8 +5,8 @@ import Storage
 // Mirrors src/features/media/api/upload.ts — uploads to Supabase Storage `media` bucket
 final class MediaUploadService {
 
-    func uploadImage(_ data: Data, mimeType: String = "image/jpeg", userId: UUID) async throws -> String {
-        let filename = "\(userId.uuidString)/\(UUID().uuidString).jpg"
+    func uploadImage(_ data: Data, mimeType: String = "image/jpeg", ext: String = "jpg", userId: UUID) async throws -> String {
+        let filename = "\(userId.uuidString)/\(UUID().uuidString).\(ext)"
 
         try await supabase.storage
             .from("media")

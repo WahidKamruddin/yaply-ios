@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ChatView: View {
     let conversationId: UUID
@@ -16,8 +17,6 @@ struct ChatView: View {
     @State private var searchQuery = ""
     @State private var showGroupInfo = false
     @State private var swipeOffset: CGFloat = 0
-    @State private var showDetail = false
-    @State private var detailTab: String = "tasks"
     @State private var distFromBottom: CGFloat = 0
     @State private var viewportHeight: CGFloat = 1
     @State private var newMsgCount = 0
@@ -28,6 +27,7 @@ struct ChatView: View {
     private var showScrollButton: Bool { distFromBottom > viewportHeight }
     @State private var feedbackDismissTask: Task<Void, Never>?
     @State private var showHelp = false
+    @State private var isDropTargeted = false
     @Environment(AppRouter.self) private var router
 
     private let convRepository = ConversationRepository()
@@ -123,10 +123,7 @@ struct ChatView: View {
                                         onOpenThread: { threadRoot = $0 },
                                         onReplyInThread: { threadRoot = $0 },
                                         onQuotationClick: { id in scrollToId = id },
-                                        onOpenDetail: { tab in
-                                            detailTab = tab
-                                            showDetail = true
-                                        },
+                                        onOpenDetail: { openPanel($0) },
                                         swipeOffset: swipeOffset
                                     )
                                     .id(msg.id)
@@ -301,11 +298,43 @@ struct ChatView: View {
                         onCancelReply: { vm.replyToMessage = nil },
                         disabled: vm.isSending,
                         onTyping: { vm.notifyTyping() },
-                        onStopTyping: { vm.notifyStopTyping() }
+                        onStopTyping: { vm.notifyStopTyping() },
+                        onPasteImage: { image in
+                            Task {
+                                if image.hasAlpha {
+                                    await vm.sendStickerMessage(image: image)
+                                } else {
+                                    let resized = image.resized(maxDimension: 1280)
+                                    if let jpeg = resized.jpegData(compressionQuality: 0.82) {
+                                        await vm.sendImageMessage(imageData: jpeg, mimeType: "image/jpeg")
+                                    }
+                                }
+                            }
+                        }
                     )
                 }
             }
         }
+        .onDrop(of: [.image], isTargeted: $isDropTargeted) { providers in
+            handleDroppedProviders(providers)
+        }
+        .overlay {
+            if isDropTargeted {
+                ZStack {
+                    Color.yaplyAccent.opacity(0.12).ignoresSafeArea()
+                    Text("Drop to send")
+                        .font(.display(15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .background(Color.yaplyAccent)
+                        .clipShape(Capsule())
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         .navigationTitle(displayName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -351,14 +380,12 @@ struct ChatView: View {
                             .clipShape(Circle())
                     }
                     Button {
-                        detailTab = "tasks"
-                        showDetail = true
+                        openPanel("tasks")
                     } label: {
                         Image(systemName: "list.bullet.rectangle.portrait")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(showDetail ? .white : Color.yaplyAccent)
+                            .foregroundStyle(Color.yaplyAccent)
                             .frame(width: 30, height: 30)
-                            .background(showDetail ? Color.yaplyAccent : Color.clear)
                             .clipShape(Circle())
                     }
                     if vm.isGroupConversation {
@@ -406,14 +433,6 @@ struct ChatView: View {
                 onDeleted: { router.pop() }
             )
         }
-        .sheet(isPresented: $showDetail) {
-            ConversationDetailView(
-                conversationId: conversationId,
-                currentUserId: currentUserId,
-                members: vm.conversationMembers,
-                initialTab: detailTab
-            )
-        }
         .sheet(item: $threadRoot) { root in
             ThreadView(
                 rootMessage: root,
@@ -425,14 +444,11 @@ struct ChatView: View {
                 )
             )
         }
-        .alert("Error", isPresented: Binding(
-            get: { vm.error != nil },
-            set: { if !$0 { vm.error = nil } }
-        )) {
-            Button("OK", role: .cancel) { vm.error = nil }
-        } message: {
-            Text(vm.error ?? "")
-        }
+        .yaplyAlert(
+            isPresented: Binding(get: { vm.error != nil }, set: { if !$0 { vm.error = nil } }),
+            title: "Something went wrong",
+            message: vm.error ?? ""
+        )
         .sheet(isPresented: $showHelp) {
             HelpView()
         }
@@ -443,6 +459,38 @@ struct ChatView: View {
         }
     }
 
+
+    /// Handles images dropped onto the conversation — a sticker dragged out of the
+    /// iOS Stickers drawer, or a photo from Photos/Files. A transparent image is
+    /// treated as a sticker (rendered bubble-free); an opaque one as a photo.
+    private func handleDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first(where: { $0.canLoadObject(ofClass: UIImage.self) }) else {
+            return false
+        }
+        _ = provider.loadObject(ofClass: UIImage.self) { object, _ in
+            guard let image = object as? UIImage else { return }
+            Task { @MainActor in
+                if image.hasAlpha {
+                    await vm.sendStickerMessage(image: image)
+                } else {
+                    let resized = image.resized(maxDimension: 1280)
+                    guard let jpeg = resized.jpegData(compressionQuality: 0.82) else { return }
+                    await vm.sendImageMessage(imageData: jpeg, mimeType: "image/jpeg")
+                }
+            }
+        }
+        return true
+    }
+
+    /// Pushes the conversation's productivity panel as a page (Tasks / Notes /
+    /// Reminders / Events / Albums / Budgets), rather than presenting a sheet.
+    private func openPanel(_ tab: String) {
+        router.push(.conversationPanel(
+            conversationId: conversationId,
+            members: vm.conversationMembers,
+            tab: tab
+        ))
+    }
 
     private func handleMessageCountChange(proxy: ScrollViewProxy) {
         guard let last = vm.messages.last else { return }
@@ -494,23 +542,21 @@ struct ChatView: View {
                 showCommandFeedback("Failed: \(error.localizedDescription)")
             }
         case "task":
-            if cmd.rawArgs.isBlank { detailTab = "tasks"; showDetail = true }
+            if cmd.rawArgs.isBlank { openPanel("tasks") }
             else { await createItem(type: "task", title: cmd.rawArgs) }
         case "note":
-            if cmd.rawArgs.isBlank { detailTab = "notes"; showDetail = true }
+            if cmd.rawArgs.isBlank { openPanel("notes") }
             else { await createItem(type: "note", title: cmd.rawArgs) }
         case "album":
-            if cmd.rawArgs.isBlank { detailTab = "albums"; showDetail = true }
+            if cmd.rawArgs.isBlank { openPanel("albums") }
             else { await createItem(type: "album", title: cmd.rawArgs) }
         case "plan":
-            if cmd.rawArgs.isBlank { detailTab = "events"; showDetail = true }
+            if cmd.rawArgs.isBlank { openPanel("events") }
             else { await createItem(type: "plan", title: cmd.rawArgs) }
         case "event":
-            detailTab = "events"
-            showDetail = true
+            openPanel("events")
         case "budget":
-            detailTab = "budgets"
-            showDetail = true
+            openPanel("budgets")
         case "thread":
             showCommandFeedback("Open a thread by long-pressing a message and tapping Reply in Thread.")
         case "help":

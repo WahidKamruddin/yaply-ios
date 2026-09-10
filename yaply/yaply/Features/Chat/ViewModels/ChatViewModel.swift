@@ -356,6 +356,46 @@ final class ChatViewModel {
         }
     }
 
+    /// Send a system/Genmoji/Markup sticker the user dropped, pasted, or picked
+    /// from the iOS keyboard. Stored as a transparent PNG in the `media` bucket
+    /// and sent unencrypted (`content: ""`, `iv: nil`, `type: "sticker"`) — same
+    /// path as image/gif, never the envelope RPC.
+    func sendStickerMessage(image: UIImage) async {
+        let normalized = image.resized(maxDimension: 512)
+        guard let png = normalized.pngData() else {
+            self.error = "Couldn't read that sticker."
+            return
+        }
+
+        let tempId = UUID()
+        messages.append(DecryptedMessage(
+            id: tempId, conversationId: conversationId, senderId: currentUserId,
+            content: "", type: "sticker", mediaUrl: nil, createdAt: Date()
+        ))
+
+        do {
+            let url = try await uploadService.uploadImage(
+                png, mimeType: "image/png", ext: "png", userId: currentUserId
+            )
+            let params = SendMessageParams(
+                conversationId: conversationId, senderId: currentUserId,
+                content: "", iv: nil, type: "sticker", mediaUrl: url, mediaMime: "image/png"
+            )
+            let sent = try await repository.sendMessage(params)
+            if messages.contains(where: { $0.id == sent.id }) {
+                messages.removeAll { $0.id == tempId }
+            } else if let idx = messages.firstIndex(where: { $0.id == tempId }) {
+                messages[idx] = DecryptedMessage(
+                    id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
+                    content: "", type: "sticker", mediaUrl: url, createdAt: sent.createdAt
+                )
+            }
+        } catch {
+            messages.removeAll { $0.id == tempId }
+            self.error = error.localizedDescription
+        }
+    }
+
     // MARK: - Delete
 
     func deleteMessage(id: UUID) async {
