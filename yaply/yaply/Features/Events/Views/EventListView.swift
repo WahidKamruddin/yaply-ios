@@ -5,17 +5,17 @@ struct EventListView: View {
     let currentUserId: UUID
     var isCurrentUserAdmin: Bool = false
 
+    @Environment(AppRouter.self) private var router
+
     @State private var events: [YaplyEvent] = []
     @State private var isLoading = false
     @State private var showCreate = false
     @State private var eventToDelete: YaplyEvent?
-    @State private var selectedEvent: YaplyEvent?
     @State private var createStatus: String = "planning"
     @State private var filter: String = "all"
     @State private var newName = ""
     @State private var newLocation = ""
     @State private var newStartsAt = Date().addingTimeInterval(3600)
-    @State private var showDatePicker = false
 
     private let repo = EventRepository()
 
@@ -56,7 +56,7 @@ struct EventListView: View {
                     } else {
                         List {
                             ForEach(filteredEvents) { event in
-                                Button(action: { selectedEvent = event }) {
+                                Button(action: { router.push(.eventDetail(event)) }) {
                                     EventRowView(event: event, isCurrentUserAdmin: isCurrentUserAdmin, repo: repo, onUpdated: { Task { await load() } })
                                 }
                                 .buttonStyle(.plain)
@@ -98,7 +98,7 @@ struct EventListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: { showCreate = true }) {
+                Button(action: { createStatus = "planning"; showCreate = true }) {
                     Image(systemName: "plus")
                         .foregroundStyle(Color.yaplyAccent)
                 }
@@ -109,27 +109,20 @@ struct EventListView: View {
             guard (notif.userInfo?["type"] as? String) == "events" else { return }
             Task { await load() }
         }
-        .sheet(item: $selectedEvent) { event in
-            EventDetailSheet(event: event, currentUserId: currentUserId)
-        }
-        .sheet(isPresented: $showCreate) {
-            createSheet
-        }
-        .alert("Delete Event", isPresented: Binding(
-            get: { eventToDelete != nil },
-            set: { if !$0 { eventToDelete = nil } }
-        )) {
-            Button("Delete", role: .destructive) {
-                guard let e = eventToDelete else { return }
-                eventToDelete = nil
-                Task {
-                    try? await repo.deleteEvent(id: e.id)
-                    events.removeAll { $0.id == e.id }
-                }
+        .yaplyPopup(isPresented: $showCreate) { createSheet }
+        .yaplyConfirm(
+            isPresented: Binding(get: { eventToDelete != nil }, set: { if !$0 { eventToDelete = nil } }),
+            title: "Delete event",
+            message: "\"\(eventToDelete?.name ?? "")\" will be permanently deleted. This cannot be undone.",
+            icon: "trash.fill",
+            confirmLabel: "Delete"
+        ) {
+            guard let e = eventToDelete else { return }
+            eventToDelete = nil
+            Task {
+                try? await repo.deleteEvent(id: e.id)
+                events.removeAll { $0.id == e.id }
             }
-            Button("Cancel", role: .cancel) { eventToDelete = nil }
-        } message: {
-            Text("\"\(eventToDelete?.name ?? "")\" will be permanently deleted. This cannot be undone.")
         }
     }
 
@@ -156,48 +149,49 @@ struct EventListView: View {
     }
 
     private var createSheet: some View {
-        NavigationStack {
-            Form {
-                Section("Type") {
-                    Picker("Type", selection: $createStatus) {
-                        Text("Planning").tag("planning")
-                        Text("Confirmed").tag("confirmed")
-                    }
-                    .pickerStyle(.segmented)
-                }
-                Section("Details") {
-                    TextField("Name", text: $newName)
-                    TextField("Location (optional)", text: $newLocation)
-                }
-                if createStatus == "confirmed" {
-                    Section("Date & Time") {
-                        DatePicker("Starts at", selection: $newStartsAt, displayedComponents: [.date, .hourAndMinute])
-                    }
+        YaplySheetScaffold(
+            title: createStatus == "planning" ? "New plan" : "New event",
+            primaryLabel: "Create",
+            primaryEnabled: !newName.isBlank,
+            primaryAction: {
+                guard !newName.isBlank else { return }
+                let name = newName, loc = newLocation, status = createStatus
+                let starts = createStatus == "confirmed" ? newStartsAt : nil
+                newName = ""; newLocation = ""
+                showCreate = false
+                Task {
+                    try? await repo.createEvent(
+                        conversationId: conversationId,
+                        createdBy: currentUserId,
+                        name: name,
+                        location: loc.isEmpty ? nil : loc,
+                        status: status,
+                        startsAt: starts
+                    )
+                    await load()
                 }
             }
-            .navigationTitle(createStatus == "planning" ? "New Plan" : "New Event")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showCreate = false }
+        ) {
+            VStack(spacing: 16) {
+                Picker("Type", selection: $createStatus) {
+                    Text("Planning").tag("planning")
+                    Text("Confirmed").tag("confirmed")
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        guard !newName.isBlank else { return }
-                        Task {
-                            try? await repo.createEvent(
-                                conversationId: conversationId,
-                                createdBy: currentUserId,
-                                name: newName,
-                                location: newLocation.isEmpty ? nil : newLocation,
-                                status: createStatus,
-                                startsAt: createStatus == "confirmed" ? newStartsAt : nil
-                            )
-                            newName = ""
-                            newLocation = ""
-                            showCreate = false
-                            await load()
-                        }
+                .pickerStyle(.segmented)
+
+                YaplyLabeledField(label: "Name") {
+                    TextField("Dinner, trip, movie night…", text: $newName)
+                        .yaplyInputStyle()
+                }
+                YaplyLabeledField(label: "Location (optional)") {
+                    TextField("Where?", text: $newLocation)
+                        .yaplyInputStyle()
+                }
+                if createStatus == "confirmed" {
+                    YaplyLabeledField(label: "Date & time") {
+                        DatePicker("", selection: $newStartsAt, displayedComponents: [.date, .hourAndMinute])
+                            .labelsHidden()
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
@@ -274,29 +268,24 @@ private struct EventRowView: View {
             }
         }
         .padding(.vertical, 4)
-        .sheet(isPresented: $showEditStartsAt) {
-            NavigationStack {
-                Form {
-                    DatePicker("Starts at", selection: $editStartsAt, displayedComponents: [.date, .hourAndMinute])
+        .yaplyPopup(isPresented: $showEditStartsAt) {
+            YaplySheetScaffold(
+                title: "Edit event time",
+                primaryLabel: "Save",
+                primaryAction: {
+                    showEditStartsAt = false
+                    Task {
+                        try? await repo?.updateStartsAt(eventId: event.id, startsAt: editStartsAt)
+                        onUpdated?()
+                    }
                 }
-                .navigationTitle("Edit Event Time")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { showEditStartsAt = false }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Save") {
-                            Task {
-                                try? await repo?.updateStartsAt(eventId: event.id, startsAt: editStartsAt)
-                                showEditStartsAt = false
-                                onUpdated?()
-                            }
-                        }
-                    }
+            ) {
+                YaplyLabeledField(label: "Starts at") {
+                    DatePicker("", selection: $editStartsAt, displayedComponents: [.date, .hourAndMinute])
+                        .labelsHidden()
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .presentationDetents([.medium])
         }
     }
 }

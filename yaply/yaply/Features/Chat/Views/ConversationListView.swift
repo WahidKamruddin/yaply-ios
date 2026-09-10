@@ -114,21 +114,19 @@ struct ConversationListView: View {
             }
         }
         .refreshable { await vm.refresh(userId: currentUserId) }
-        .alert(
-            "Delete Conversation",
+        .yaplyConfirm(
             isPresented: Binding(
                 get: { conversationToDelete != nil },
                 set: { if !$0 { conversationToDelete = nil } }
             ),
-            presenting: conversationToDelete
-        ) { item in
-            Button("Delete", role: .destructive) {
-                guard let uid = vm.currentUserId else { return }
-                Task { await vm.deleteConversation(id: item.id, userId: uid) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("This conversation will be permanently deleted for you. This cannot be undone.")
+            title: "Delete conversation",
+            message: "This conversation will be permanently deleted for you. This cannot be undone.",
+            icon: "trash.fill",
+            confirmLabel: "Delete"
+        ) {
+            guard let item = conversationToDelete, let uid = vm.currentUserId else { return }
+            conversationToDelete = nil
+            Task { await vm.deleteConversation(id: item.id, userId: uid) }
         }
     }
 
@@ -150,6 +148,19 @@ struct ConversationListView: View {
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.yaplyBorder))
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
+
+            if !vm.messageRequests.isEmpty && searchText.isEmpty {
+                HStack {
+                    Spacer()
+                    Button(action: { router.push(.messageRequests) }) {
+                        Text("Message requests (\(vm.messageRequests.count))")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.yaplyAccent)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+            }
 
             Divider().foregroundStyle(Color.yaplyBorder)
 
@@ -184,9 +195,6 @@ struct ConversationListView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        if !vm.messageRequests.isEmpty && searchText.isEmpty {
-                            messageRequestsSection
-                        }
                         ForEach(filtered) { item in
                             Button(action: { router.push(.conversation(id: item.id)) }) {
                                 ConversationRowView(item: item, currentUserId: currentUserId)
@@ -201,43 +209,6 @@ struct ConversationListView: View {
                     .padding(.top, 8)
                 }
             }
-        }
-    }
-
-    // MARK: - Message requests section
-
-    private var messageRequestsSection: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Message requests")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.yaplySecondary)
-                Spacer()
-                Text("\(vm.messageRequests.count)")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
-                    .frame(minWidth: 16, minHeight: 16)
-                    .background(Color.yaplyAccent)
-                    .clipShape(Capsule())
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 6)
-            .padding(.bottom, 4)
-
-            ForEach(vm.messageRequests) { item in
-                Button(action: { router.push(.conversation(id: item.id)) }) {
-                    ConversationRowView(item: item, currentUserId: currentUserId)
-                }
-                .buttonStyle(.plain)
-                Divider()
-                    .padding(.leading, 76)
-                    .foregroundStyle(Color.yaplyBorder)
-            }
-
-            Divider()
-                .padding(.top, 4)
-                .foregroundStyle(Color.yaplyBorder)
         }
     }
 

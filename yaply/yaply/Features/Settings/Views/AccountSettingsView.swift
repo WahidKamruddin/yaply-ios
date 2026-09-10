@@ -91,25 +91,38 @@ struct AccountSettingsView: View {
             signOutButton
         }
         .task { await load() }
-        .alert("Delete your account?", isPresented: $showDeleteDialog) {
-            TextField("Type DELETE to confirm", text: $deleteConfirmText)
-                .autocorrectionDisabled()
-            Button("Cancel", role: .cancel) { deleteConfirmText = "" }
-            Button("Delete account", role: .destructive) {
-                guard deleteConfirmText == "DELETE" else { return }
-                Task {
-                    if await vm.deleteAccount() {
-                        try? await authService.signOut()
+        .yaplyPopup(isPresented: $showDeleteDialog) {
+            YaplySheetScaffold(
+                title: "Delete your account?",
+                primaryLabel: "Delete",
+                primaryEnabled: deleteConfirmText == "DELETE",
+                primaryTint: .yaplyDanger,
+                primaryAction: {
+                    guard deleteConfirmText == "DELETE" else { return }
+                    showDeleteDialog = false
+                    Task {
+                        if await vm.deleteAccount() {
+                            try? await authService.signOut()
+                        }
+                        deleteConfirmText = ""
                     }
-                    deleteConfirmText = ""
+                }
+            ) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("This permanently deletes your profile, messages, and memberships across every conversation. This cannot be undone.")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.yaplySecondary)
+                    YaplyLabeledField(label: "Type DELETE to confirm") {
+                        TextField("DELETE", text: $deleteConfirmText)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.characters)
+                            .yaplyInputStyle()
+                    }
                 }
             }
-            .disabled(deleteConfirmText != "DELETE")
-        } message: {
-            Text("This permanently deletes your profile, messages, and memberships across every conversation. This cannot be undone.")
         }
-        .sheet(isPresented: $showBirthdatePicker) {
-            NavigationStack {
+        .yaplyPopup(isPresented: $showBirthdatePicker) {
+            YaplySheetScaffold(title: "Birthdate", primaryLabel: "Done", primaryAction: { showBirthdatePicker = false }) {
                 DatePicker(
                     "Birthdate",
                     selection: Binding(get: { birthdate ?? Date() }, set: { birthdate = $0 }),
@@ -117,16 +130,8 @@ struct AccountSettingsView: View {
                     displayedComponents: .date
                 )
                 .datePickerStyle(.graphical)
-                .padding()
-                .navigationTitle("Birthdate")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { showBirthdatePicker = false }
-                    }
-                }
+                .labelsHidden()
             }
-            .presentationDetents([.medium])
         }
     }
 

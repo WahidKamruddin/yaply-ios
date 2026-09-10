@@ -188,44 +188,42 @@ struct GroupInfoView: View {
                         .foregroundStyle(Color.yaplyAccent)
                 }
             }
-            .alert("Error", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(error ?? "")
+            .yaplyAlert(
+                isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } }),
+                title: "Something went wrong",
+                message: error ?? ""
+            )
+            .yaplyConfirm(
+                isPresented: Binding(get: { memberToPromote != nil }, set: { if !$0 { memberToPromote = nil } }),
+                title: "Make admin?",
+                message: "\(memberToPromote?.profile.name ?? "This member") will be able to add/remove members, delete any item, and delete the group.",
+                icon: "star.fill",
+                confirmLabel: "Make Admin",
+                isDestructive: false
+            ) {
+                guard let m = memberToPromote else { return }
+                memberToPromote = nil
+                Task { await promoteToAdmin(m.userId) }
             }
-            .alert("Make Admin?", isPresented: Binding(
-                get: { memberToPromote != nil },
-                set: { if !$0 { memberToPromote = nil } }
-            )) {
-                Button("Make Admin") {
-                    guard let m = memberToPromote else { return }
-                    memberToPromote = nil
-                    Task { await promoteToAdmin(m.userId) }
-                }
-                Button("Cancel", role: .cancel) { memberToPromote = nil }
-            } message: {
-                Text("\(memberToPromote?.profile.name ?? "This member") will be able to add/remove members, delete any item, and delete the group.")
+            .yaplyConfirm(
+                isPresented: Binding(get: { memberToRemove != nil }, set: { if !$0 { memberToRemove = nil } }),
+                title: "Remove member?",
+                message: "\(memberToRemove?.profile.name ?? "This member") will lose access to this group and all its messages.",
+                icon: "person.fill.xmark",
+                confirmLabel: "Remove"
+            ) {
+                guard let m = memberToRemove else { return }
+                memberToRemove = nil
+                Task { await removeMember(m.userId) }
             }
-            .alert("Remove Member?", isPresented: Binding(
-                get: { memberToRemove != nil },
-                set: { if !$0 { memberToRemove = nil } }
-            )) {
-                Button("Remove", role: .destructive) {
-                    guard let m = memberToRemove else { return }
-                    memberToRemove = nil
-                    Task { await removeMember(m.userId) }
-                }
-                Button("Cancel", role: .cancel) { memberToRemove = nil }
-            } message: {
-                Text("\(memberToRemove?.profile.name ?? "This member") will lose access to this group and all its messages.")
-            }
-            .alert("Delete Group for Everyone?", isPresented: $showDeleteGroupConfirm) {
-                Button("Delete", role: .destructive) {
-                    Task { await deleteGroupForEveryone() }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This will permanently delete \"\(conversationName)\" and all its messages for every member. This cannot be undone.")
+            .yaplyConfirm(
+                isPresented: $showDeleteGroupConfirm,
+                title: "Delete group for everyone?",
+                message: "This will permanently delete \"\(conversationName)\" and all its messages for every member. This cannot be undone.",
+                icon: "trash.fill",
+                confirmLabel: "Delete"
+            ) {
+                Task { await deleteGroupForEveryone() }
             }
             .task { await loadMembers() }
         }

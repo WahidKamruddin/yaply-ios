@@ -121,18 +121,17 @@ struct AvailabilityCalendarView: View {
         }
         .background(Color.yaplyBackground)
         .task { await loadData() }
-        .alert("Confirm this time?", isPresented: Binding(
-            get: { confirmSlot != nil },
-            set: { if !$0 { confirmSlot = nil } }
-        )) {
-            Button("Confirm") {
-                guard let slot = confirmSlot else { return }
-                confirmSlot = nil
-                Task { await doConfirm(slot) }
-            }
-            Button("Cancel", role: .cancel) { confirmSlot = nil }
-        } message: {
-            Text(confirmSlotMessage)
+        .yaplyConfirm(
+            isPresented: Binding(get: { confirmSlot != nil }, set: { if !$0 { confirmSlot = nil } }),
+            title: "Confirm this time?",
+            message: confirmSlotMessage,
+            icon: "calendar.badge.checkmark",
+            confirmLabel: "Confirm",
+            isDestructive: false
+        ) {
+            guard let slot = confirmSlot else { return }
+            confirmSlot = nil
+            Task { await doConfirm(slot) }
         }
     }
 

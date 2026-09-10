@@ -28,14 +28,14 @@ struct DeviceSettingsView: View {
                 Task { await load() }
             }
         }
-        .alert(
-            "Sign out \(pendingRevoke?.displayName ?? "this device")?",
-            isPresented: Binding(get: { pendingRevoke != nil }, set: { if !$0 { pendingRevoke = nil } })
+        .yaplyConfirm(
+            isPresented: Binding(get: { pendingRevoke != nil }, set: { if !$0 { pendingRevoke = nil } }),
+            title: "Sign out \(pendingRevoke?.displayName ?? "this device")?",
+            message: revokeMessage,
+            icon: "iphone.slash",
+            confirmLabel: "Sign out"
         ) {
-            Button("Cancel", role: .cancel) { pendingRevoke = nil }
-            Button("Sign out", role: .destructive) { Task { await revoke() } }
-        } message: {
-            Text(revokeMessage)
+            Task { await revoke() }
         }
     }
 

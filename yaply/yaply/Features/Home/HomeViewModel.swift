@@ -10,11 +10,14 @@ import Supabase
 final class HomeViewModel {
     private(set) var reminders: [YaplyReminder] = []
     private(set) var events: [YaplyEvent] = []
+    private(set) var friends: [Friend] = []
     private(set) var displayName: String = ""
     private(set) var isLoading = false
 
     private let reminderRepo = ReminderRepository()
     private let eventRepo = EventRepository()
+    private let friendsRepo = FriendsRepository()
+    private let conversationRepo = ConversationRepository()
 
     var upcomingEvents: [YaplyEvent] {
         events.filter { event in
@@ -30,6 +33,7 @@ final class HomeViewModel {
 
         async let remindersFetch = try? reminderRepo.fetchAllPending()
         async let eventsFetch = try? eventRepo.fetchAllRecent()
+        async let friendsFetch = try? friendsRepo.fetchFriends(userId: userId)
         async let profileFetch: Profile? = try? await supabase
             .from("profiles")
             .select("id, username, display_name, avatar_url, bio, is_online, last_seen_at, created_at, updated_at")
@@ -40,7 +44,16 @@ final class HomeViewModel {
 
         reminders = await remindersFetch ?? []
         events = await eventsFetch ?? []
+        friends = (await friendsFetch ?? []).sorted { $0.profile.name.localizedCaseInsensitiveCompare($1.profile.name) == .orderedAscending }
         displayName = await profileFetch?.name ?? ""
+    }
+
+    // Opens the existing DM with this friend, creating one if none exists yet.
+    func directConversationId(for friendUserId: UUID, currentUserId: UUID, existing: [ConversationListItem]) async -> UUID? {
+        if let match = existing.first(where: { !$0.isGroup && $0.otherMember(currentUserId: currentUserId)?.userId == friendUserId }) {
+            return match.id
+        }
+        return try? await conversationRepo.createDirectConversation(userId: currentUserId, otherUserId: friendUserId)
     }
 
     static func greeting(name: String) -> String {

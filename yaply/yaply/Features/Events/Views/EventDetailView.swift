@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct EventDetailSheet: View {
+struct EventDetailView: View {
     let event: YaplyEvent
     let currentUserId: UUID
 
@@ -38,43 +38,43 @@ struct EventDetailSheet: View {
     private var notGoing: [YaplyEventRsvp] { rsvps.filter { $0.response == "not_going" } }
 
     var body: some View {
-        NavigationStack {
+        Group {
             if event.isPlanning {
                 planningView
             } else {
                 confirmedView
             }
         }
-        .sheet(item: $activeSheet) { kind in
+        .yaplyPopup(item: $activeSheet) { kind in
             switch kind {
             case .lockTime:   lockTimeSheet
             case .linkAlbum:  linkAlbumSheet
             case .linkBudget: linkBudgetSheet
             }
         }
-        .alert("Lock Event Time?", isPresented: $showLockConfirm) {
-            Button("Lock", role: .destructive) {
-                Task { await doLockTime() }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This will confirm \"\(event.name)\" for \(lockDate.formatted(.dateTime.weekday(.wide).month(.wide).day().hour().minute())) and move it from Planning to Confirmed.")
+        .yaplyConfirm(
+            isPresented: $showLockConfirm,
+            title: "Lock event time?",
+            message: "This will confirm \"\(event.name)\" for \(lockDate.formatted(.dateTime.weekday(.wide).month(.wide).day().hour().minute())) and move it from Planning to Confirmed.",
+            icon: "lock.fill",
+            confirmLabel: "Lock",
+            isDestructive: false
+        ) {
+            Task { await doLockTime() }
         }
-        .alert("Unlink Album", isPresented: Binding(
-            get: { albumToUnlink != nil },
-            set: { if !$0 { albumToUnlink = nil } }
-        )) {
-            Button("Unlink", role: .destructive) {
-                guard let album = albumToUnlink else { return }
-                albumToUnlink = nil
-                Task {
-                    try? await albumRepo.unlinkFromEvent(albumId: album.id)
-                    linkedAlbums.removeAll { $0.id == album.id }
-                }
+        .yaplyConfirm(
+            isPresented: Binding(get: { albumToUnlink != nil }, set: { if !$0 { albumToUnlink = nil } }),
+            title: "Unlink album",
+            message: "Remove \"\(albumToUnlink?.name ?? "")\" from this event?",
+            icon: "link",
+            confirmLabel: "Unlink"
+        ) {
+            guard let album = albumToUnlink else { return }
+            albumToUnlink = nil
+            Task {
+                try? await albumRepo.unlinkFromEvent(albumId: album.id)
+                linkedAlbums.removeAll { $0.id == album.id }
             }
-            Button("Cancel", role: .cancel) { albumToUnlink = nil }
-        } message: {
-            Text("Remove \"\(albumToUnlink?.name ?? "")\" from this event?")
         }
     }
 
@@ -89,7 +89,7 @@ struct EventDetailSheet: View {
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(Color.yaplyPrimary)
                         .lineLimit(1)
-                    Spacer()
+                    Spacer(minLength: 0)
                 }
                 if let desc = event.description, !desc.isEmpty {
                     Text(desc)
@@ -103,25 +103,24 @@ struct EventDetailSheet: View {
                         .foregroundStyle(Color.yaplySecondary)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.yaplySurface)
-            .overlay(alignment: .bottom) { Divider() }
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Color.yaplyBorder).frame(height: 1)
+            }
 
             AvailabilityCalendarView(event: event, currentUserId: currentUserId)
         }
+        .background(Color.yaplyBackground)
         .navigationTitle("Plan")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Done") { dismiss() }
-                    .foregroundStyle(Color.yaplyAccent)
-            }
             if isCreator {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Lock Time") { activeSheet = .lockTime }
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color.yaplyAccent)
                 }
             }
@@ -159,7 +158,7 @@ struct EventDetailSheet: View {
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.yaplySurface)
+                .background(Color.yaplyTint)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
 
                 // RSVP section
@@ -204,16 +203,15 @@ struct EventDetailSheet: View {
                     }
                 }
                 .padding(16)
-                .background(Color.yaplySurface)
+                .background(Color.yaplyTint)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
 
                 // Linked Albums
                 linkedSection(
                     title: "Albums",
                     systemImage: "photo.stack",
-                    onLink: {
-                        Task { await loadAllAlbums(); activeSheet = .linkAlbum }
-                    }
+                    isEmpty: linkedAlbums.isEmpty,
+                    onLink: { Task { await loadAllAlbums(); activeSheet = .linkAlbum } }
                 ) {
                     ForEach(linkedAlbums) { album in
                         linkedAlbumRow(album)
@@ -226,9 +224,8 @@ struct EventDetailSheet: View {
                 linkedSection(
                     title: "Budgets",
                     systemImage: "dollarsign.circle",
-                    onLink: {
-                        Task { await loadAllBudgets(); activeSheet = .linkBudget }
-                    }
+                    isEmpty: linkedBudgets.isEmpty,
+                    onLink: { Task { await loadAllBudgets(); activeSheet = .linkBudget } }
                 ) {
                     ForEach(linkedBudgets) { budget in
                         linkedBudgetRow(budget)
@@ -242,12 +239,6 @@ struct EventDetailSheet: View {
         .background(Color.yaplyBackground)
         .navigationTitle("Event")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Done") { dismiss() }
-                    .foregroundStyle(Color.yaplyAccent)
-            }
-        }
         .task { await loadConfirmed() }
     }
 
@@ -255,25 +246,18 @@ struct EventDetailSheet: View {
 
     @ViewBuilder
     private var lockTimeSheet: some View {
-        NavigationStack {
-            Form {
-                Section("When is this happening?") {
-                    DatePicker("Date & Time", selection: $lockDate, displayedComponents: [.date, .hourAndMinute])
-                }
+        YaplySheetScaffold(
+            title: "Lock event time",
+            primaryLabel: "Lock",
+            primaryAction: {
+                activeSheet = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showLockConfirm = true }
             }
-            .navigationTitle("Lock Event Time")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { activeSheet = nil }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Lock") {
-                        activeSheet = nil
-                        showLockConfirm = true
-                    }
-                    .foregroundStyle(Color.yaplyAccent)
-                }
+        ) {
+            YaplyLabeledField(label: "When is this happening?") {
+                DatePicker("", selection: $lockDate, displayedComponents: [.date, .hourAndMinute])
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -282,11 +266,14 @@ struct EventDetailSheet: View {
 
     @ViewBuilder
     private var linkAlbumSheet: some View {
-        NavigationStack {
-            List {
+        YaplySheetScaffold(title: "Link album") {
+            VStack(spacing: 8) {
                 if allAlbums.isEmpty {
                     Text("No albums in this conversation")
+                        .font(.system(size: 13))
                         .foregroundStyle(Color.yaplySecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 8)
                 } else {
                     ForEach(allAlbums) { album in
                         let isLinked = linkedAlbums.contains { $0.id == album.id }
@@ -315,17 +302,13 @@ struct EventDetailSheet: View {
                                         .font(.system(size: 13, weight: .semibold))
                                 }
                             }
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                            .background(Color.yaplyTint)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
                         .buttonStyle(.plain)
                     }
-                }
-            }
-            .navigationTitle("Link Album")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { activeSheet = nil }
-                        .foregroundStyle(Color.yaplyAccent)
                 }
             }
         }
@@ -335,11 +318,14 @@ struct EventDetailSheet: View {
 
     @ViewBuilder
     private var linkBudgetSheet: some View {
-        NavigationStack {
-            List {
+        YaplySheetScaffold(title: "Link budget") {
+            VStack(spacing: 8) {
                 if allBudgets.isEmpty {
                     Text("No budgets in this conversation")
+                        .font(.system(size: 13))
                         .foregroundStyle(Color.yaplySecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 8)
                 } else {
                     ForEach(allBudgets) { budget in
                         let isLinked = linkedBudgets.contains { $0.id == budget.id }
@@ -380,17 +366,13 @@ struct EventDetailSheet: View {
                                         .font(.system(size: 13, weight: .semibold))
                                 }
                             }
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                            .background(Color.yaplyTint)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
                         .buttonStyle(.plain)
                     }
-                }
-            }
-            .navigationTitle("Link Budget")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { activeSheet = nil }
-                        .foregroundStyle(Color.yaplyAccent)
                 }
             }
         }
@@ -457,6 +439,7 @@ struct EventDetailSheet: View {
     private func linkedSection<Items: View, Empty: View>(
         title: String,
         systemImage: String,
+        isEmpty: Bool,
         onLink: @escaping () -> Void,
         @ViewBuilder content: @escaping () -> Items,
         @ViewBuilder emptyLabel: @escaping () -> Empty
@@ -472,13 +455,12 @@ struct EventDetailSheet: View {
                     .foregroundStyle(Color.yaplyAccent)
             }
             content()
-            if (title == "Albums" && linkedAlbums.isEmpty) ||
-               (title == "Budgets" && linkedBudgets.isEmpty) {
+            if isEmpty {
                 emptyLabel()
             }
         }
         .padding(16)
-        .background(Color.yaplySurface)
+        .background(Color.yaplyTint)
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 

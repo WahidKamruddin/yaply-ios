@@ -88,49 +88,44 @@ struct NoteListView: View {
             guard (notif.userInfo?["type"] as? String) == "notes" else { return }
             Task { await load() }
         }
-        .sheet(isPresented: $showAdd) {
+        .yaplyPopup(isPresented: $showAdd) {
             addNoteSheet
         }
-        .alert("Delete Note", isPresented: Binding(
-            get: { noteToDelete != nil },
-            set: { if !$0 { noteToDelete = nil } }
-        )) {
-            Button("Delete", role: .destructive) {
-                guard let n = noteToDelete else { return }
-                noteToDelete = nil
-                Task {
-                    try? await repo.deleteNote(id: n.id)
-                    notes.removeAll { $0.id == n.id }
-                }
+        .yaplyConfirm(
+            isPresented: Binding(get: { noteToDelete != nil }, set: { if !$0 { noteToDelete = nil } }),
+            title: "Delete note",
+            message: "\"\(noteToDelete?.title ?? "")\" will be permanently deleted. This cannot be undone.",
+            icon: "trash.fill",
+            confirmLabel: "Delete"
+        ) {
+            guard let n = noteToDelete else { return }
+            noteToDelete = nil
+            Task {
+                try? await repo.deleteNote(id: n.id)
+                notes.removeAll { $0.id == n.id }
             }
-            Button("Cancel", role: .cancel) { noteToDelete = nil }
-        } message: {
-            Text("\"\(noteToDelete?.title ?? "")\" will be permanently deleted. This cannot be undone.")
         }
     }
 
     private var addNoteSheet: some View {
-        NavigationStack {
-            Form {
-                TextField("Title", text: $newTitle)
+        YaplySheetScaffold(
+            title: "New note",
+            primaryLabel: "Add",
+            primaryEnabled: !newTitle.isBlank,
+            primaryAction: {
+                guard !newTitle.isBlank else { return }
+                let title = newTitle
+                newTitle = ""
+                showAdd = false
+                Task {
+                    try? await repo.createNote(conversationId: conversationId, userId: currentUserId, title: title)
+                    await load()
+                }
             }
-            .navigationTitle("New Note")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showAdd = false }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
-                        guard !newTitle.isBlank else { return }
-                        Task {
-                            try? await repo.createNote(conversationId: conversationId, userId: currentUserId, title: newTitle)
-                            newTitle = ""
-                            showAdd = false
-                            await load()
-                        }
-                    }
-                }
+        ) {
+            YaplyLabeledField(label: "Title") {
+                TextField("Note title", text: $newTitle)
+                    .yaplyInputStyle()
             }
         }
     }

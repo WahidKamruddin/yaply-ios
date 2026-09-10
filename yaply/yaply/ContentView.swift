@@ -99,6 +99,21 @@ struct ContentView: View {
             TaskListView(conversationId: convId, currentUserId: userId)
         case .noteList:
             Text("Notes — coming soon").foregroundStyle(Color.yaplySecondary)
+        case .conversationPanel(let convId, let members, let tab):
+            ConversationDetailView(
+                conversationId: convId,
+                currentUserId: userId,
+                members: members,
+                initialTab: tab
+            )
+        case .eventDetail(let event):
+            EventDetailView(event: event, currentUserId: userId)
+        case .albumDetail(let album, let isAdmin):
+            AlbumGalleryView(
+                album: album,
+                currentUserId: userId,
+                isCurrentUserAdmin: isAdmin
+            )
         case .settings:
             SettingsView()
         case .settingsDetail(let tab):
@@ -109,6 +124,8 @@ struct ContentView: View {
             )
         case .friends:
             FriendsView(currentUserId: userId)
+        case .messageRequests:
+            MessageRequestsView(currentUserId: userId)
         }
     }
 }

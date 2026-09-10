@@ -5,10 +5,11 @@ struct AlbumListView: View {
     let currentUserId: UUID
     var isCurrentUserAdmin: Bool = false
 
+    @Environment(AppRouter.self) private var router
+
     @State private var albums: [YaplyAlbum] = []
     @State private var isLoading = false
     @State private var showCreate = false
-    @State private var selectedAlbum: YaplyAlbum?
     @State private var newName = ""
     @State private var albumToDelete: YaplyAlbum?
 
@@ -30,17 +31,15 @@ struct AlbumListView: View {
                 } else {
                     List {
                         ForEach(albums) { album in
-                            Button(action: { selectedAlbum = album }) {
+                            Button(action: {
+                                router.push(.albumDetail(album: album, isCurrentUserAdmin: isCurrentUserAdmin))
+                            }) {
                                 AlbumRowView(album: album)
                             }
                             .buttonStyle(.plain)
                             .yaplyCardStyle()
                             .yaplyCardRowContainer()
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                // Additive to the gallery sheet's own delete entry point —
-                                // gives Albums the same trailing-swipe delete affordance as
-                                // every other list, using the identical creator/admin/lock
-                                // gating the gallery sheet already applies.
                                 let canDelete = album.createdBy == currentUserId || isCurrentUserAdmin
                                 let effectiveCanDelete = canDelete && (!album.locked || isCurrentUserAdmin)
                                 Button(role: effectiveCanDelete ? .destructive : .none) {
@@ -86,61 +85,44 @@ struct AlbumListView: View {
             guard (notif.userInfo?["type"] as? String) == "albums" else { return }
             Task { await load() }
         }
-        .sheet(isPresented: $showCreate) {
+        .yaplyPopup(isPresented: $showCreate) {
             createSheet
         }
-        .sheet(item: $selectedAlbum) { album in
-            AlbumGallerySheet(
-                album: album,
-                currentUserId: currentUserId,
-                isCurrentUserAdmin: isCurrentUserAdmin,
-                repo: repo,
-                onDeleted: { Task { await load() } }
-            )
-        }
-        .alert(
-            "Delete Album",
-            isPresented: Binding(
-                get: { albumToDelete != nil },
-                set: { if !$0 { albumToDelete = nil } }
-            ),
-            presenting: albumToDelete
-        ) { album in
-            Button("Delete", role: .destructive) {
-                albumToDelete = nil
-                Task {
-                    try? await repo.deleteAlbum(id: album.id)
-                    albums.removeAll { $0.id == album.id }
-                }
+        .yaplyConfirm(
+            isPresented: Binding(get: { albumToDelete != nil }, set: { if !$0 { albumToDelete = nil } }),
+            title: "Delete album",
+            message: "\"\(albumToDelete?.name ?? "")\" and all its photos will be permanently deleted. This cannot be undone.",
+            icon: "trash.fill",
+            confirmLabel: "Delete"
+        ) {
+            guard let album = albumToDelete else { return }
+            albumToDelete = nil
+            Task {
+                try? await repo.deleteAlbum(id: album.id)
+                albums.removeAll { $0.id == album.id }
             }
-            Button("Cancel", role: .cancel) { albumToDelete = nil }
-        } message: { album in
-            Text("\"\(album.name)\" and all its photos will be permanently deleted. This cannot be undone.")
         }
     }
 
     private var createSheet: some View {
-        NavigationStack {
-            Form {
-                TextField("Album name", text: $newName)
+        YaplySheetScaffold(
+            title: "New album",
+            primaryLabel: "Create",
+            primaryEnabled: !newName.isBlank,
+            primaryAction: {
+                guard !newName.isBlank else { return }
+                let name = newName
+                newName = ""
+                showCreate = false
+                Task {
+                    try? await repo.createAlbum(conversationId: conversationId, createdBy: currentUserId, name: name)
+                    await load()
+                }
             }
-            .navigationTitle("New Album")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showCreate = false }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        guard !newName.isBlank else { return }
-                        Task {
-                            try? await repo.createAlbum(conversationId: conversationId, createdBy: currentUserId, name: newName)
-                            newName = ""
-                            showCreate = false
-                            await load()
-                        }
-                    }
-                }
+        ) {
+            YaplyLabeledField(label: "Album name") {
+                TextField("Trip photos, party pics…", text: $newName)
+                    .yaplyInputStyle()
             }
         }
     }
@@ -207,14 +189,12 @@ private struct AlbumRowView: View {
     }
 }
 
-// MARK: - Album Gallery Sheet
+// MARK: - Album Gallery (pushed page)
 
-private struct AlbumGallerySheet: View {
+struct AlbumGalleryView: View {
     let album: YaplyAlbum
     let currentUserId: UUID
     var isCurrentUserAdmin: Bool = false
-    let repo: AlbumRepository
-    let onDeleted: () -> Void
 
     @State private var media: [YaplyAlbumMedia] = []
     @State private var events: [YaplyEvent] = []
@@ -224,81 +204,61 @@ private struct AlbumGallerySheet: View {
     @State private var showLinkPicker = false
     @Environment(\.dismiss) private var dismiss
 
+    private let repo = AlbumRepository()
     private let eventRepo = EventRepository()
+
+    private func notifyChanged() {
+        NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "albums"])
+    }
     private var isCreator: Bool { album.createdBy == currentUserId }
     private var canDelete: Bool { isCreator || isCurrentUserAdmin }
     private var effectiveCanDelete: Bool { canDelete && (!album.locked || isCurrentUserAdmin) }
 
-    let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+    private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.yaplyBackground.ignoresSafeArea()
-                if isLoading {
-                    ProgressView().tint(Color.yaplyAccent)
-                } else if media.isEmpty {
-                    EmptyStateView(icon: "photo", title: "No photos yet")
-                } else {
-                    ScrollView {
-                        LazyVGrid(columns: columns, spacing: 2) {
-                            ForEach(media) { item in
-                                AsyncImage(url: URL(string: item.mediaUrl)) { phase in
-                                    switch phase {
-                                    case .success(let img):
-                                        img.resizable().scaledToFill()
-                                            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 110, maxHeight: 110)
-                                            .clipped()
-                                    default:
-                                        Color.yaplyBackground
-                                            .frame(height: 110)
-                                    }
+        ZStack {
+            Color.yaplyBackground.ignoresSafeArea()
+            if isLoading {
+                ProgressView().tint(Color.yaplyAccent)
+            } else if media.isEmpty {
+                EmptyStateView(icon: "photo", title: "No photos yet")
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 2) {
+                        ForEach(media) { item in
+                            AsyncImage(url: URL(string: item.mediaUrl)) { phase in
+                                switch phase {
+                                case .success(let img):
+                                    img.resizable().scaledToFill()
+                                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 110, maxHeight: 110)
+                                        .clipped()
+                                default:
+                                    Color.yaplyCard.frame(height: 110)
                                 }
                             }
                         }
-                        .padding(.top, 2)
                     }
+                    .padding(.top, 2)
                 }
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    if album.eventId != nil {
-                        Button {
-                            showUnlinkConfirm = true
-                        } label: {
-                            Image(systemName: "link.badge.minus")
-                        }
-                        .foregroundStyle(Color.orange)
-                    } else if !events.isEmpty {
-                        Button {
-                            showLinkPicker = true
-                        } label: {
-                            Image(systemName: "link")
-                        }
-                        .foregroundStyle(Color.yaplyAccent)
+        }
+        .navigationTitle(album.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                if album.eventId != nil {
+                    Button { showUnlinkConfirm = true } label: {
+                        Image(systemName: "link.badge.minus").foregroundStyle(Color.orange)
+                    }
+                } else if !events.isEmpty {
+                    Button { showLinkPicker = true } label: {
+                        Image(systemName: "link").foregroundStyle(Color.yaplyAccent)
                     }
                 }
-                ToolbarItem(placement: .principal) {
-                    VStack(spacing: 1) {
-                        Text(album.name).font(.headline)
-                        Text("by \(album.creator?.name ?? "Unknown")")
-                            .font(.caption2)
-                            .foregroundStyle(Color.yaplySecondary)
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 14) {
-                        Button {
-                            if effectiveCanDelete { showDeleteConfirm = true }
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .foregroundStyle(effectiveCanDelete ? Color.yaplyDanger : Color(UIColor.systemGray4))
-                        .disabled(!effectiveCanDelete)
-
-                        Button("Done") { dismiss() }
-                            .foregroundStyle(Color.yaplyAccent)
+                if effectiveCanDelete {
+                    Button { showDeleteConfirm = true } label: {
+                        Image(systemName: "trash").foregroundStyle(Color.yaplyDanger)
                     }
                 }
             }
@@ -310,31 +270,33 @@ private struct AlbumGallerySheet: View {
             events = (try? await eventFetch) ?? []
             isLoading = false
         }
-        .alert("Delete Album", isPresented: $showDeleteConfirm) {
-            Button("Delete", role: .destructive) {
-                Task {
-                    try? await repo.deleteAlbum(id: album.id)
-                    onDeleted()
-                    dismiss()
-                }
+        .yaplyConfirm(
+            isPresented: $showDeleteConfirm,
+            title: "Delete album",
+            message: "\"\(album.name)\" and all its photos will be permanently deleted. This cannot be undone.",
+            icon: "trash.fill",
+            confirmLabel: "Delete"
+        ) {
+            Task {
+                try? await repo.deleteAlbum(id: album.id)
+                notifyChanged()
+                dismiss()
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("\"\(album.name)\" and all its photos will be permanently deleted. This cannot be undone.")
         }
-        .alert("Unlink Album", isPresented: $showUnlinkConfirm) {
-            Button("Unlink", role: .destructive) {
-                Task {
-                    try? await repo.unlinkFromEvent(albumId: album.id)
-                    onDeleted()
-                    dismiss()
-                }
+        .yaplyConfirm(
+            isPresented: $showUnlinkConfirm,
+            title: "Unlink album",
+            message: "Remove \"\(album.name)\" from its linked event?",
+            icon: "link",
+            confirmLabel: "Unlink"
+        ) {
+            Task {
+                try? await repo.unlinkFromEvent(albumId: album.id)
+                notifyChanged()
+                dismiss()
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Remove \"\(album.name)\" from its linked event?")
         }
-        .sheet(isPresented: $showLinkPicker) {
+        .yaplyPopup(isPresented: $showLinkPicker) {
             EventLinkPickerSheet(
                 title: "Link \"\(album.name)\"",
                 events: events,
@@ -342,10 +304,9 @@ private struct AlbumGallerySheet: View {
                     Task {
                         try? await repo.linkToEvent(albumId: album.id, eventId: event.id)
                         showLinkPicker = false
-                        onDeleted()
+                        notifyChanged()
                     }
-                },
-                onCancel: { showLinkPicker = false }
+                }
             )
         }
     }
@@ -357,14 +318,16 @@ struct EventLinkPickerSheet: View {
     let title: String
     let events: [YaplyEvent]
     let onSelect: (YaplyEvent) -> Void
-    let onCancel: () -> Void
 
     var body: some View {
-        NavigationStack {
-            List {
+        YaplySheetScaffold(title: title) {
+            VStack(spacing: 8) {
                 if events.isEmpty {
                     Text("No events in this conversation")
+                        .font(.system(size: 13))
                         .foregroundStyle(Color.yaplySecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 8)
                 } else {
                     ForEach(events) { event in
                         Button(action: { onSelect(event) }) {
@@ -391,18 +354,15 @@ struct EventLinkPickerSheet: View {
                                             .foregroundStyle(Color.yaplySecondary)
                                     }
                                 }
+                                Spacer()
                             }
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                            .background(Color.yaplyTint)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
                         .buttonStyle(.plain)
                     }
-                }
-            }
-            .listStyle(.plain)
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
                 }
             }
         }

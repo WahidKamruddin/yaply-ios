@@ -2,7 +2,7 @@ import Foundation
 import Supabase
 import PostgREST
 
-struct YaplyAlbum: Codable, Identifiable {
+struct YaplyAlbum: Codable, Identifiable, Hashable {
     let id: UUID
     let conversationId: UUID
     var name: String
@@ -13,7 +13,7 @@ struct YaplyAlbum: Codable, Identifiable {
     var eventId: UUID?
     var albumMedia: [AlbumMediaThumb]?
 
-    struct AlbumMediaThumb: Codable {
+    struct AlbumMediaThumb: Codable, Hashable {
         let mediaUrl: String
         enum CodingKeys: String, CodingKey { case mediaUrl = "media_url" }
     }

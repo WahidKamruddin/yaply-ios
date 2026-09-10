@@ -5,7 +5,7 @@ import Supabase
 import PostgREST
 
 // Shared creator profile struct — used by Task, Note, Event, Album, Budget, Reminder models
-struct CreatorProfile: Codable {
+struct CreatorProfile: Codable, Hashable {
     let displayName: String?
     let username: String?
 

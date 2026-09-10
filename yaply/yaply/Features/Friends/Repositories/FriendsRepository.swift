@@ -8,7 +8,7 @@ import Foundation
 final class FriendsRepository {
 
     private static let profileColumns =
-        "id, username, display_name, avatar_url, bio, public_key, is_online, last_seen_at, created_at, updated_at, birthdate"
+        "id, username, display_name, avatar_url, bio, is_online, last_seen_at, created_at, updated_at, birthdate"
 
     // MARK: - Friends / requests
 
@@ -178,7 +178,7 @@ final class FriendsRepository {
         return rows.map { row in
             Profile(
                 id: row.id, username: row.username, displayName: row.displayName,
-                avatarUrl: row.avatarUrl, bio: nil, publicKey: nil,
+                avatarUrl: row.avatarUrl, bio: nil,
                 isOnline: row.isOnline, lastSeenAt: row.lastSeenAt,
                 createdAt: Date(), updatedAt: Date(), birthdateRaw: nil
             )

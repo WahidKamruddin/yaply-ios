@@ -108,10 +108,10 @@ struct BudgetListView: View {
             guard (notif.userInfo?["type"] as? String) == "budgets" else { return }
             Task { await load() }
         }
-        .sheet(isPresented: $showCreate) {
+        .yaplyPopup(isPresented: $showCreate) {
             createSheet
         }
-        .sheet(item: $budgetToLink) { budget in
+        .yaplyPopup(item: $budgetToLink) { budget in
             EventLinkPickerSheet(
                 title: "Link \"\(budget.name)\"",
                 events: events,
@@ -121,60 +121,59 @@ struct BudgetListView: View {
                         budgetToLink = nil
                         await load()
                     }
-                },
-                onCancel: { budgetToLink = nil }
+                }
             )
         }
-        .alert("Delete Budget", isPresented: Binding(
-            get: { budgetToDelete != nil },
-            set: { if !$0 { budgetToDelete = nil } }
-        )) {
-            Button("Delete", role: .destructive) {
-                guard let b = budgetToDelete else { return }
-                budgetToDelete = nil
-                Task {
-                    try? await repo.deleteBudget(id: b.id)
-                    budgets.removeAll { $0.id == b.id }
-                }
+        .yaplyConfirm(
+            isPresented: Binding(get: { budgetToDelete != nil }, set: { if !$0 { budgetToDelete = nil } }),
+            title: "Delete budget",
+            message: "\"\(budgetToDelete?.name ?? "")\" and all its expenses will be permanently deleted. This cannot be undone.",
+            icon: "trash.fill",
+            confirmLabel: "Delete"
+        ) {
+            guard let b = budgetToDelete else { return }
+            budgetToDelete = nil
+            Task {
+                try? await repo.deleteBudget(id: b.id)
+                budgets.removeAll { $0.id == b.id }
             }
-            Button("Cancel", role: .cancel) { budgetToDelete = nil }
-        } message: {
-            Text("\"\(budgetToDelete?.name ?? "")\" and all its expenses will be permanently deleted. This cannot be undone.")
         }
     }
 
     private var createSheet: some View {
-        NavigationStack {
-            Form {
-                Section("Details") {
-                    TextField("Budget name", text: $newName)
-                    TextField("Total amount", text: $newAmount)
+        YaplySheetScaffold(
+            title: "New budget",
+            primaryLabel: "Create",
+            primaryEnabled: !newName.isBlank && (Double(newAmount) ?? 0) > 0,
+            primaryAction: {
+                guard !newName.isBlank, let amount = Double(newAmount), amount > 0 else { return }
+                let name = newName, currency = newCurrency
+                newName = ""; newAmount = ""
+                showCreate = false
+                Task {
+                    try? await repo.createBudget(conversationId: conversationId, createdBy: currentUserId, name: name, totalAmount: amount, currency: currency)
+                    await load()
+                }
+            }
+        ) {
+            VStack(spacing: 16) {
+                YaplyLabeledField(label: "Budget name") {
+                    TextField("Trip, dinner, group gift…", text: $newName)
+                        .yaplyInputStyle()
+                }
+                YaplyLabeledField(label: "Total amount") {
+                    TextField("0.00", text: $newAmount)
                         .keyboardType(.decimalPad)
+                        .yaplyInputStyle()
+                }
+                YaplyLabeledField(label: "Currency") {
                     Picker("Currency", selection: $newCurrency) {
                         Text("USD").tag("USD")
                         Text("EUR").tag("EUR")
                         Text("GBP").tag("GBP")
                         Text("CAD").tag("CAD")
                     }
-                }
-            }
-            .navigationTitle("New Budget")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showCreate = false }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        guard !newName.isBlank, let amount = Double(newAmount), amount > 0 else { return }
-                        Task {
-                            try? await repo.createBudget(conversationId: conversationId, createdBy: currentUserId, name: newName, totalAmount: amount, currency: newCurrency)
-                            newName = ""
-                            newAmount = ""
-                            showCreate = false
-                            await load()
-                        }
-                    }
+                    .pickerStyle(.segmented)
                 }
             }
         }
