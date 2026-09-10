@@ -229,6 +229,10 @@ The migrations in `../supabase/migrations/` match the live database. Use the col
 
 **message_envelopes:** `id, message_id (FK → messages ON DELETE CASCADE), recipient_user_id, recipient_fp (JWK x.y of the recipient device key), eph_pub (JSON-stringified JWK of the message's ephemeral public key), key_iv (base64 nonce[12]), wrapped_key (base64 AES-GCM(KEK, raw mk) + tag), created_at` — UNIQUE(message_id, recipient_user_id, recipient_fp). RLS: SELECT for recipient or the message's sender.
 
+**message_reactions:** `message_id, user_id, emoji, created_at` — PK `(message_id, user_id, emoji)`. The DB allows several reactions per user; `ChatViewModel.setReaction` enforces **one per user** (Messenger/Instagram): it calls `MessageRepository.removeAllReactions(messageId:userId:)` then inserts the new emoji. In the realtime publication.
+
+**pinned_messages:** `conversation_id (FK → conversations ON DELETE CASCADE), message_id (FK → messages ON DELETE CASCADE), pinned_by (FK → profiles ON DELETE SET NULL), pinned_at` — PK `(conversation_id, message_id)`. Any conversation member can pin/unpin (membership-scoped RLS). In the realtime publication. Migration `00036_pinned_messages.sql` (web repo). `MessageRepository.fetchPinnedMessageIds` / `pinMessage` / `unpinMessage`; `ChatViewModel.pinnedMessageIds` + `togglePin` + realtime on `pinned_messages`.
+
 **Key RPCs:**
 - `find_or_create_direct_conversation(target_user_id uuid)` — always use this for DMs (security definer, handles RLS). Raises `blocked` / `cannot message yourself`. On create, the recipient's `request_state` is `'accepted'` when the pair are friends, else `'pending'`.
 - `send_message_with_envelopes(p_conversation_id, p_content, p_iv, p_envelopes jsonb, p_type, p_reply_to_id, p_thread_id, p_media_url, p_media_mime)` — the **only** way to send an encrypted message; writes the `enc_v = 2` row and all envelopes atomically. Raises `cannot send in this conversation` when the sender is a pending recipient, someone declined, or either party is blocked.
@@ -541,6 +545,32 @@ Implemented — `Features/Friends/`: `Repositories/FriendsRepository.swift` (all
 **Not yet built:** a dedicated "unfriend/block from a group member row" shortcut (currently only reachable via the shared `ProfileView` card); device-level friend-request push notifications (in-app badge/realtime only for now).
 
 ---
+
+## Message long-press actions (Messenger / Instagram style)
+
+Long-pressing a bubble (`MessageBubbleView.onLongPress`, 0.3s + haptic) opens
+`MessageActionsOverlay` — a full-screen `.ultraThinMaterial` scrim with three
+stacked pieces, roughly anchored to the tapped bubble (`BubbleAnchorKey`
+preference records each bubble's global `midY`; `ChatView` clamps it):
+
+- **Reaction rail** (top, horizontal): the user's 6 personalized emoji +
+  a `+`. Tapping one applies it (`ChatViewModel.setReaction`, single-reaction).
+  `+` opens `EmojiPickerSheet` (a grid built by walking the emoji Unicode
+  blocks); the pick is applied *and* `CustomReactionStore.promote` swaps it into
+  the last rail slot. The rail set lives in `UserDefaults`
+  (`CustomReactionStore`, `yaply.customReactions.v1`) — **local to the device**,
+  not synced.
+- **Bubble copy** (middle): a non-interactive `BubbleContentView` of the tapped
+  message — the shared bubble body extracted from `MessageBubbleView` so the
+  overlay renders an exact copy.
+- **Action card** (bottom): base menu is **Reply · Copy · More**. `More` swaps
+  the card to **Pin/Unpin · Delete** (Delete only when `canDelete`, i.e. own
+  message) **· More** (which goes back). Translate is intentionally absent —
+  deferred. Delete routes to `ChatView`'s `yaplyConfirm`; Copy puts
+  `message.content` (or the media URL) on `UIPasteboard`.
+
+`MessageBubbleView` no longer uses SwiftUI `.contextMenu` at all. Existing
+reaction pills below a bubble still toggle via `setReaction`.
 
 ## Media: GIFs & Stickers
 

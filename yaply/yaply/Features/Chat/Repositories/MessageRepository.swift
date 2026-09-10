@@ -277,4 +277,56 @@ final class MessageRepository {
             .eq("emoji", value: emoji)
             .execute()
     }
+
+    /// Clears every reaction this user has on a message — used before applying a
+    /// new one so a user only ever holds a single reaction (Messenger / Instagram).
+    func removeAllReactions(messageId: UUID, userId: UUID) async throws {
+        try await supabase
+            .from("message_reactions")
+            .delete()
+            .eq("message_id", value: messageId.uuidString)
+            .eq("user_id", value: userId.uuidString)
+            .execute()
+    }
+
+    // MARK: - Pins
+
+    private struct PinRow: Decodable { let messageId: UUID; enum CodingKeys: String, CodingKey { case messageId = "message_id" } }
+
+    func fetchPinnedMessageIds(conversationId: UUID) async throws -> [UUID] {
+        let rows: [PinRow] = try await supabase
+            .from("pinned_messages")
+            .select("message_id")
+            .eq("conversation_id", value: conversationId.uuidString)
+            .order("pinned_at", ascending: false)
+            .execute()
+            .value
+        return rows.map(\.messageId)
+    }
+
+    func pinMessage(messageId: UUID, conversationId: UUID, userId: UUID) async throws {
+        struct Insert: Encodable {
+            let conversation_id: String
+            let message_id: String
+            let pinned_by: String
+        }
+        try await supabase
+            .from("pinned_messages")
+            .upsert(
+                Insert(conversation_id: conversationId.uuidString,
+                       message_id: messageId.uuidString,
+                       pinned_by: userId.uuidString),
+                onConflict: "conversation_id,message_id"
+            )
+            .execute()
+    }
+
+    func unpinMessage(messageId: UUID, conversationId: UUID) async throws {
+        try await supabase
+            .from("pinned_messages")
+            .delete()
+            .eq("conversation_id", value: conversationId.uuidString)
+            .eq("message_id", value: messageId.uuidString)
+            .execute()
+    }
 }

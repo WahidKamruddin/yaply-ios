@@ -14,6 +14,8 @@ final class ChatViewModel {
     var replyToMessage: DecryptedMessage?
     private(set) var typingUsernames: [String] = []
     private(set) var reactionsMap: [UUID: [ReactionGroup]] = [:]
+    /// Pinned message ids, most-recently-pinned first.
+    private(set) var pinnedMessageIds: [UUID] = []
 
     // Read receipts
     private(set) var readByOtherSet: Set<UUID> = []
@@ -59,9 +61,11 @@ final class ChatViewModel {
         async let msgs: Void = loadMessages()
         async let conv: Void = loadConversationInfo()
         async let reqState: Void = loadMyRequestState()
+        async let pins: Void = loadPins()
         await msgs
         await conv
         await reqState
+        await pins
         isLoading = false
         try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
         await markAndFetchReceipts()
@@ -417,33 +421,78 @@ final class ChatViewModel {
 
     // MARK: - Reactions
 
-    func toggleReaction(messageId: UUID, emoji: String) {
-        let groups = reactionsMap[messageId] ?? []
-        let alreadyReacted = groups.first(where: { $0.emoji == emoji })?.reactedByMe ?? false
+    /// The single emoji this user currently has on a message, if any.
+    func myReaction(for messageId: UUID) -> String? {
+        reactionsMap[messageId]?.first(where: { $0.reactedByMe })?.emoji
+    }
 
-        // Optimistic update
-        var updated = groups
-        if alreadyReacted {
-            updated = updated.map { g in
-                g.emoji == emoji ? ReactionGroup(emoji: g.emoji, count: g.count - 1, reactedByMe: false) : g
-            }.filter { $0.count > 0 }
-        } else if let idx = updated.firstIndex(where: { $0.emoji == emoji }) {
-            updated[idx] = ReactionGroup(emoji: emoji, count: updated[idx].count + 1, reactedByMe: true)
-        } else {
-            updated.append(ReactionGroup(emoji: emoji, count: 1, reactedByMe: true))
+    /// One reaction per user (Messenger / Instagram): picking `emoji` replaces any
+    /// existing reaction; picking the one already set removes it.
+    func setReaction(messageId: UUID, emoji: String) {
+        let groups = reactionsMap[messageId] ?? []
+        let mine = groups.first(where: { $0.reactedByMe })?.emoji
+        let clearing = (mine == emoji)
+
+        // Optimistic: drop my current reaction, then add the new one unless toggling off.
+        var updated = groups.compactMap { g -> ReactionGroup? in
+            guard g.reactedByMe else { return g }
+            let c = g.count - 1
+            return c > 0 ? ReactionGroup(emoji: g.emoji, count: c, reactedByMe: false) : nil
+        }
+        if !clearing {
+            if let idx = updated.firstIndex(where: { $0.emoji == emoji }) {
+                updated[idx] = ReactionGroup(emoji: emoji, count: updated[idx].count + 1, reactedByMe: true)
+            } else {
+                updated.append(ReactionGroup(emoji: emoji, count: 1, reactedByMe: true))
+            }
         }
         reactionsMap[messageId] = updated
 
         Task {
             do {
-                if alreadyReacted {
-                    try await repository.removeReaction(messageId: messageId, userId: currentUserId, emoji: emoji)
-                } else {
+                try await repository.removeAllReactions(messageId: messageId, userId: currentUserId)
+                if !clearing {
                     try await repository.addReaction(messageId: messageId, userId: currentUserId, emoji: emoji)
                 }
             } catch {
-                // Roll back optimistic update on error
                 await loadReactions()
+            }
+        }
+    }
+
+    // MARK: - Pins
+
+    func isPinned(_ messageId: UUID) -> Bool { pinnedMessageIds.contains(messageId) }
+
+    /// The most-recently-pinned message that is currently loaded, for the banner.
+    var topPinnedMessage: DecryptedMessage? {
+        for id in pinnedMessageIds {
+            if let m = messages.first(where: { $0.id == id }) { return m }
+        }
+        return nil
+    }
+
+    func loadPins() async {
+        guard let ids = try? await repository.fetchPinnedMessageIds(conversationId: conversationId) else { return }
+        pinnedMessageIds = ids
+    }
+
+    func togglePin(messageId: UUID) {
+        let wasPinned = pinnedMessageIds.contains(messageId)
+        if wasPinned {
+            pinnedMessageIds.removeAll { $0 == messageId }
+        } else {
+            pinnedMessageIds.insert(messageId, at: 0)
+        }
+        Task {
+            do {
+                if wasPinned {
+                    try await repository.unpinMessage(messageId: messageId, conversationId: conversationId)
+                } else {
+                    try await repository.pinMessage(messageId: messageId, conversationId: conversationId, userId: currentUserId)
+                }
+            } catch {
+                await loadPins()
             }
         }
     }
@@ -468,6 +517,11 @@ final class ChatViewModel {
             )
             let reactionInserts = pg.postgresChange(InsertAction.self, schema: "public", table: "message_reactions")
             let reactionDeletes = pg.postgresChange(DeleteAction.self, schema: "public", table: "message_reactions")
+            let pinInserts = pg.postgresChange(
+                InsertAction.self, schema: "public", table: "pinned_messages",
+                filter: .eq("conversation_id", value: conversationId.uuidString)
+            )
+            let pinDeletes = pg.postgresChange(DeleteAction.self, schema: "public", table: "pinned_messages")
             let readInserts = pg.postgresChange(InsertAction.self, schema: "public", table: "message_reads")
             let profileUpdates = pg.postgresChange(UpdateAction.self, schema: "public", table: "profiles")
             try? await pg.subscribeWithError()
@@ -494,6 +548,8 @@ final class ChatViewModel {
                 }
                 group.addTask { for await _ in reactionInserts { await self.loadReactionsForCurrentMessages() } }
                 group.addTask { for await _ in reactionDeletes { await self.loadReactionsForCurrentMessages() } }
+                group.addTask { for await _ in pinInserts { await self.loadPins() } }
+                group.addTask { for await _ in pinDeletes { await self.loadPins() } }
                 group.addTask { for await _ in readInserts { await self.fetchReadStatus() } }
                 group.addTask { for await event in profileUpdates { await self.handleProfileUpdate(event.record) } }
                 group.addTask { for await payload in typingStream { await self.handleTyping(payload) } }

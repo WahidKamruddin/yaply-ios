@@ -28,6 +28,10 @@ struct ChatView: View {
     @State private var feedbackDismissTask: Task<Void, Never>?
     @State private var showHelp = false
     @State private var isDropTargeted = false
+    @State private var actionsMessage: DecryptedMessage?
+    @State private var actionsAnchorY: CGFloat = 300
+    @State private var messageToDelete: UUID?
+    @State private var bubbleAnchors: [UUID: CGFloat] = [:]
     @Environment(AppRouter.self) private var router
 
     private let convRepository = ConversationRepository()
@@ -97,6 +101,16 @@ struct ChatView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
+                if let pin = vm.topPinnedMessage {
+                    PinnedBannerView(
+                        message: pin,
+                        count: vm.pinnedMessageIds.count,
+                        onTap: { scrollToId = pin.id },
+                        onUnpin: { vm.togglePin(messageId: pin.id) }
+                    )
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 0) {
@@ -119,12 +133,24 @@ struct ChatView: View {
                                         reactions: vm.reactionsMap[msg.id] ?? [],
                                         onReply: { vm.replyToMessage = $0 },
                                         onDelete: { id in Task { await vm.deleteMessage(id: id) } },
-                                        onReact: { msgId, emoji in vm.toggleReaction(messageId: msgId, emoji: emoji) },
+                                        onReact: { msgId, emoji in vm.setReaction(messageId: msgId, emoji: emoji) },
                                         onOpenThread: { threadRoot = $0 },
                                         onReplyInThread: { threadRoot = $0 },
                                         onQuotationClick: { id in scrollToId = id },
                                         onOpenDetail: { openPanel($0) },
+                                        onLongPress: { m in
+                                            actionsAnchorY = bubbleAnchors[m.id] ?? 300
+                                            actionsMessage = m
+                                        },
                                         swipeOffset: swipeOffset
+                                    )
+                                    .background(
+                                        GeometryReader { g in
+                                            Color.clear.preference(
+                                                key: BubbleAnchorKey.self,
+                                                value: [msg.id: g.frame(in: .global).midY]
+                                            )
+                                        }
                                     )
                                     .id(msg.id)
                                     .background(highlightedId == msg.id ? Color.yaplyAccent.opacity(0.12) : Color.clear)
@@ -162,6 +188,9 @@ struct ChatView: View {
                             Color.clear.frame(height: 10).id("bottom")
                         }
                         .padding(.vertical, 8)
+                    }
+                    .onPreferenceChange(BubbleAnchorKey.self) { anchors in
+                        bubbleAnchors = anchors
                     }
                     .onScrollGeometryChange(for: CGPoint.self) { geo in
                         CGPoint(
@@ -335,6 +364,43 @@ struct ChatView: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
+        .overlay {
+            if let m = actionsMessage {
+                MessageActionsOverlay(
+                    message: m,
+                    isOwn: m.senderId == currentUserId,
+                    myReaction: vm.myReaction(for: m.id),
+                    isPinned: vm.isPinned(m.id),
+                    canDelete: m.senderId == currentUserId,
+                    anchorY: actionsAnchorY,
+                    onReact: { emoji in vm.setReaction(messageId: m.id, emoji: emoji) },
+                    onReply: { vm.replyToMessage = m },
+                    onCopy: {
+                        UIPasteboard.general.string = m.isText ? m.content : (m.mediaUrl ?? "")
+                    },
+                    onTogglePin: { vm.togglePin(messageId: m.id) },
+                    onDelete: { messageToDelete = m.id },
+                    onDismiss: { actionsMessage = nil }
+                )
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: actionsMessage?.id)
+        .yaplyConfirm(
+            isPresented: Binding(
+                get: { messageToDelete != nil },
+                set: { if !$0 { messageToDelete = nil } }
+            ),
+            title: "Delete message",
+            message: "This will delete the message for everyone.",
+            icon: "trash.fill",
+            confirmLabel: "Delete"
+        ) {
+            if let id = messageToDelete {
+                Task { await vm.deleteMessage(id: id) }
+            }
+            messageToDelete = nil
+        }
         .navigationTitle(displayName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -673,5 +739,62 @@ private struct HelpView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Bubble anchor tracking (for the long-press actions overlay)
+
+struct BubbleAnchorKey: PreferenceKey {
+    static let defaultValue: [UUID: CGFloat] = [:]
+    static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+// MARK: - Pinned message banner
+
+private struct PinnedBannerView: View {
+    let message: DecryptedMessage
+    let count: Int
+    let onTap: () -> Void
+    let onUnpin: () -> Void
+
+    private var preview: String {
+        if message.isDeleted { return "Message deleted" }
+        switch message.type {
+        case "sticker": return "Sticker"
+        case "gif": return "GIF"
+        case "image": return "📷 Photo"
+        default: return message.content
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "pin.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.yaplyAccent)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(count > 1 ? "\(count) pinned messages" : "Pinned message")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.yaplyAccent)
+                Text(preview)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.yaplyPrimary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Button(action: onUnpin) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.yaplySecondary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.yaplyTint)
+        .overlay(Rectangle().fill(Color.yaplyBorderSoft).frame(height: 0.5), alignment: .bottom)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
     }
 }
