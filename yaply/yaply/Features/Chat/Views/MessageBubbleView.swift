@@ -1,8 +1,6 @@
 import SwiftUI
 import Kingfisher
 
-private let quickEmojis = ["👍", "❤️", "😂", "😮", "😢", "🎉"]
-
 // Tab names that match ConversationDetailView tab IDs
 private let systemMessageTabMap: [(pattern: String, tab: String)] = [
     ("Plan created",  "events"),
@@ -32,10 +30,11 @@ struct MessageBubbleView: View {
     var onReplyInThread: ((DecryptedMessage) -> Void)?
     var onQuotationClick: ((UUID) -> Void)?
     var onOpenDetail: ((String) -> Void)?
+    /// Long-press on the bubble — opens the Messenger-style actions overlay.
+    var onLongPress: ((DecryptedMessage) -> Void)?
 
     var swipeOffset: CGFloat = 0
 
-    @State private var showDeleteConfirmation = false
     @State private var replyDragOffset: CGFloat = 0
     @State private var hasTriggeredReply = false
 
@@ -128,33 +127,11 @@ struct MessageBubbleView: View {
                     }
 
                     bubbleContent
-                        .contextMenu {
-                            if !message.isDeleted {
-                                Section("React") {
-                                    ForEach(quickEmojis, id: \.self) { emoji in
-                                        Button(emoji) { onReact?(message.id, emoji) }
-                                    }
-                                }
-                                Section {
-                                    Button { onReply(message) } label: {
-                                        Label("Reply", systemImage: "arrowshape.turn.up.left")
-                                    }
-                                    Button { onReplyInThread?(message) } label: {
-                                        Label("Reply in Thread", systemImage: "bubble.left.and.bubble.right")
-                                    }
-                                    if isOwn {
-                                        Button("Delete", role: .destructive) { showDeleteConfirmation = true }
-                                    }
-                                }
-                            }
+                        .onLongPressGesture(minimumDuration: 0.3) {
+                            guard !message.isDeleted else { return }
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            onLongPress?(message)
                         }
-                        .yaplyConfirm(
-                            isPresented: $showDeleteConfirmation,
-                            title: "Delete message",
-                            message: "This will delete the message for everyone.",
-                            icon: "trash.fill",
-                            confirmLabel: "Delete"
-                        ) { onDelete(message.id) }
 
                     if !reactions.isEmpty {
                         reactionPills
@@ -259,8 +236,63 @@ struct MessageBubbleView: View {
 
     // MARK: - Bubble content
 
-    @ViewBuilder
     private var bubbleContent: some View {
+        BubbleContentView(message: message, isOwn: isOwn)
+    }
+
+    // MARK: - Reply preview block
+
+    private func replyBlock(_ reply: DecryptedMessage) -> some View {
+        Button {
+            onQuotationClick?(reply.id)
+        } label: {
+            HStack(spacing: 2) {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(Color.yaplyAccent)
+                    .frame(width: 2, height: 22)
+                    .padding(.horizontal, 6)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(reply.senderProfile?.name ?? "Unknown")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.yaplyAccent)
+                        .lineLimit(1)
+                    Text(replyPreview(reply))
+                        .font(.system(size: 12))
+                        .italic(reply.isDeleted)
+                        .foregroundStyle(reply.isDeleted ? Color.yaplySecondary.opacity(0.7) : Color.yaplySecondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .padding(.trailing, 14)
+            }
+            .frame(height: 36)
+            .background(Color.yaplyTint)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.yaplyBorderSoft, lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func replyPreview(_ reply: DecryptedMessage) -> String {
+        if reply.isDeleted { return "Message deleted" }
+        switch reply.type {
+        case "sticker": return "Sticker"
+        case "gif": return "GIF"
+        case "image": return "📷 Photo"
+        default: return String(reply.content.prefix(60))
+        }
+    }
+}
+
+/// The visual body of a message bubble (text / media / sticker / gif / deleted /
+/// decrypt-failed) with no row chrome. Extracted so the long-press actions
+/// overlay can render an exact copy of the tapped bubble.
+struct BubbleContentView: View {
+    let message: DecryptedMessage
+    let isOwn: Bool
+
+    @ViewBuilder
+    var body: some View {
         if message.isDeleted {
             Text("Message deleted")
                 .font(.subheadline)
@@ -349,49 +381,6 @@ struct MessageBubbleView: View {
                     BubbleShape(isOwn: isOwn)
                         .stroke(isOwn ? Color.clear : Color.yaplyBorderSoft, lineWidth: 1)
                 )
-        }
-    }
-
-    // MARK: - Reply preview block
-
-    private func replyBlock(_ reply: DecryptedMessage) -> some View {
-        Button {
-            onQuotationClick?(reply.id)
-        } label: {
-            HStack(spacing: 2) {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(Color.yaplyAccent)
-                    .frame(width: 2, height: 22)
-                    .padding(.horizontal, 6)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(reply.senderProfile?.name ?? "Unknown")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.yaplyAccent)
-                        .lineLimit(1)
-                    Text(replyPreview(reply))
-                        .font(.system(size: 12))
-                        .italic(reply.isDeleted)
-                        .foregroundStyle(reply.isDeleted ? Color.yaplySecondary.opacity(0.7) : Color.yaplySecondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                .padding(.trailing, 14)
-            }
-            .frame(height: 36)
-            .background(Color.yaplyTint)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.yaplyBorderSoft, lineWidth: 0.5))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func replyPreview(_ reply: DecryptedMessage) -> String {
-        if reply.isDeleted { return "Message deleted" }
-        switch reply.type {
-        case "sticker": return "Sticker"
-        case "gif": return "GIF"
-        case "image": return "📷 Photo"
-        default: return String(reply.content.prefix(60))
         }
     }
 
