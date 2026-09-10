@@ -6,9 +6,18 @@ struct MessageInputView: View {
     @Binding var text: String
     let replyTo: DecryptedMessage?
     let onSend: () -> Void
-    let onAttachment: () -> Void
     let onCancelReply: () -> Void
     let disabled: Bool
+    /// Expanding attachment menu actions (Messenger / Instagram style).
+    /// Default to no-ops so lightweight hosts (e.g. ThreadView) can omit them.
+    var onPickFile: () -> Void = {}
+    var onPickCamera: () -> Void = {}
+    var onPickImage: () -> Void = {}
+    var onStartVoice: () -> Void = {}
+    /// Emoji / expression button that lives inside the text field.
+    var onEmoji: () -> Void = {}
+    /// Hides the attachment menu + emoji button entirely (thread replies).
+    var showAttachments: Bool = true
     var onTyping: (() -> Void)? = nil
     var onStopTyping: (() -> Void)? = nil
     /// A sticker/image pasted from the clipboard (e.g. a sticker copied in Messages).
@@ -16,6 +25,7 @@ struct MessageInputView: View {
 
     @State private var showCommandPalette = false
     @State private var canPasteImage = false
+    @State private var menuExpanded = false
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -62,15 +72,37 @@ struct MessageInputView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
-                Button(action: onAttachment) {
-                    Image(systemName: "paperclip")
-                        .font(.system(size: 20))
-                        .foregroundStyle(Color.yaplySecondary)
+            HStack(alignment: .bottom, spacing: 8) {
+                if showAttachments {
+                    // Leading toggle: collapsed shows a "+", expanded shows a chevron
+                    // that closes the menu again. Same model as Messenger / Instagram.
+                    Button {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            menuExpanded.toggle()
+                        }
+                        if menuExpanded { isFocused = false }
+                    } label: {
+                        Image(systemName: menuExpanded ? "chevron.right" : "plus")
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(Color.yaplySecondary)
+                            .frame(width: 30, height: 36)
+                            .contentShape(Rectangle())
+                    }
+                    .disabled(disabled)
                 }
-                .disabled(disabled)
 
-                if canPasteImage, let onPasteImage {
+                // Expanding action row. The text field naturally narrows to make room.
+                if showAttachments, menuExpanded {
+                    HStack(spacing: 6) {
+                        attachmentButton("doc", action: onPickFile)
+                        attachmentButton("camera", action: onPickCamera)
+                        attachmentButton("mic", action: onStartVoice)
+                        attachmentButton("photo", action: onPickImage)
+                    }
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                }
+
+                if !menuExpanded, canPasteImage, let onPasteImage {
                     PasteButton(supportedContentTypes: [.image]) { providers in
                         guard let provider = providers.first(where: { $0.canLoadObject(ofClass: UIImage.self) }) else { return }
                         _ = provider.loadObject(ofClass: UIImage.self) { object, _ in
@@ -84,7 +116,7 @@ struct MessageInputView: View {
                     .disabled(disabled)
                 }
 
-                HStack(alignment: .bottom) {
+                HStack(alignment: .bottom, spacing: 8) {
                     TextField("Message...", text: $text, axis: .vertical)
                         .lineLimit(1...6)
                         .font(.system(size: 15))
@@ -99,8 +131,26 @@ struct MessageInputView: View {
                             withAnimation(.easeOut(duration: 0.15)) {
                                 showCommandPalette = isPaletteActive
                             }
-                            if !new.isEmpty { onTyping?() } else { onStopTyping?() }
+                            if !new.isEmpty {
+                                onTyping?()
+                                if menuExpanded {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                        menuExpanded = false
+                                    }
+                                }
+                            } else {
+                                onStopTyping?()
+                            }
                         }
+
+                    if showAttachments {
+                        Button(action: onEmoji) {
+                            Image(systemName: "face.smiling")
+                                .font(.system(size: 18))
+                                .foregroundStyle(Color.yaplySecondary)
+                        }
+                        .disabled(disabled)
+                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -112,12 +162,13 @@ struct MessageInputView: View {
                     guard !text.isBlank else { return }
                     onSend()
                 }) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 16, weight: .semibold))
+                    Image(systemName: "message.fill")
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 32, height: 32)
                         .background(text.isBlank ? Color.yaplySecondary : Color.yaplyAccent)
                         .clipShape(Circle())
+                        .frame(height: 38, alignment: .center)
                 }
                 .disabled(text.isBlank || disabled)
                 .animation(.easeInOut(duration: 0.15), value: text.isBlank)
@@ -127,6 +178,13 @@ struct MessageInputView: View {
             .background(Color.yaplySurface)
             .overlay(Rectangle().fill(Color.yaplyBorder).frame(height: 1), alignment: .top)
         }
+        .onChange(of: isFocused) { _, focused in
+            if focused, menuExpanded {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    menuExpanded = false
+                }
+            }
+        }
         .onAppear { canPasteImage = UIPasteboard.general.hasImages }
         .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
             canPasteImage = UIPasteboard.general.hasImages
@@ -134,6 +192,23 @@ struct MessageInputView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             canPasteImage = UIPasteboard.general.hasImages
         }
+    }
+
+    private func attachmentButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                menuExpanded = false
+            }
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(Color.yaplyAccent)
+                .frame(width: 34, height: 34)
+                .background(Color.yaplyTint)
+                .clipShape(Circle())
+        }
+        .disabled(disabled)
     }
 
     // Query for palette filtering (text after "/" before any space)

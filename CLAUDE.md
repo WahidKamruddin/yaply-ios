@@ -222,7 +222,7 @@ The migrations in `../supabase/migrations/` match the live database. Use the col
 
 **user_blocks:** `blocker_id, blocked_id, created_at` — PK (blocker_id, blocked_id), directed. RLS restricts everything to `blocker_id = auth.uid()`, so a blocked user can never see the row.
 
-**messages:** `id, conversation_id, sender_id, type ('text'|'image'|'gif'|'sticker'|'system'|...), content (base64 ciphertext+tag or base64 UTF-8 plaintext), iv (base64 nonce[12]; nil = phase-1), enc_v (smallint — 2 = envelope-encrypted, nil = phase-1), media_url, media_mime, reply_to_id, thread_id, edited_at, deleted_at, created_at`
+**messages:** `id, conversation_id, sender_id, type ('text'|'image'|'gif'|'sticker'|'file'|'voice'|'system'|'ai'), content (base64 ciphertext+tag or base64 UTF-8 plaintext), iv (base64 nonce[12]; nil = phase-1), enc_v (smallint — 2 = envelope-encrypted, nil = phase-1), media_url, media_mime, reply_to_id, thread_id, edited_at, deleted_at, created_at`
 - Sort order: `created_at DESC`
 - System messages: `type = 'system'`, `iv = nil`, `enc_v = nil`, `sender_id = creator`, `deleted_at = now + 7 days` (auto-destruct)
 - Media/sticker/gif messages are **never** encrypted: `content = ''`, `iv = nil`, `enc_v = nil`
@@ -576,13 +576,43 @@ would clip off screen (card visibility wins). Three pieces:
 `MessageBubbleView` no longer uses SwiftUI `.contextMenu` at all. Existing
 reaction pills below a bubble still toggle via `setReaction`.
 
+## Composer attachment menu & expression picker
+
+`MessageInputView` uses the Messenger / Instagram composer model. The leading
+button is a **`+` that toggles to a `chevron.right`**; expanded, it reveals a
+horizontal row — **File · Camera · Voice message · Image** — and the text field
+narrows to make room. The menu auto-collapses when the field gains focus or the
+user starts typing. `ChatView` owns the presentation: `photosPicker` (Image),
+`fullScreenCover` → `CameraPicker` (`UIImagePickerController(.camera)`),
+`fileImporter` → `ChatViewModel.sendFileMessage` (`type:"file"`), and — for
+Voice — swaps the whole composer for `VoiceRecorderBar` (like the
+`MessageRequestBarView` swap). `ThreadView` passes `showAttachments: false` so
+thread replies keep the plain composer.
+
+A `face.smiling` button **inside** the text field opens `ExpressionPickerSheet`
+(tabs: **GIFs** — reuses `GifPickerView`; **Stickers** / **Voice notes** —
+"coming soon", these are the reusable saved-clip features, built later).
+
+**Voice messages** (`type:"voice"`): `AudioRecorderService` records AAC `.m4a`
+(`AVAudioRecorder`) to temp; `ChatViewModel.sendVoiceMessage` uploads via
+`MediaUploadService.uploadFile` to the `media` bucket and sends
+`type:"voice"`, `media_mime:"audio/mp4"`, `content:""`, `iv:nil` — **not** the
+envelope RPC (media is never E2E encrypted). `VoiceMessageBubble` (AVPlayer +
+periodic time observer) is the playback UI. Needs `NSMicrophoneUsageDescription`
+(Info.plist). Enum value added in web migration
+`../supabase/migrations/00037_voice_message_type.sql`; web renders an `<audio>`
+element.
+
+**File attachments** (`type:"file"`): `FileAttachmentBubble` — icon + filename
+pill, opens the public media URL. Web already renders `type:"file"` as a
+download link, so it round-trips.
+
 ## Media: GIFs & Stickers
 
-Paperclip → `MediaPickerView` (Photos + GIFs tabs). Photos compress to JPEG and
-send `type:"image"`; GIFs send `type:"gif"` with the Giphy URL (hot-linked, not
-re-hosted). All media is a plain `MessageRepository.sendMessage` insert —
-`content:"" , iv:nil`, `enc_v` NULL — **never** the envelope RPC (media is not
-E2E encrypted, matching web).
+GIFs send `type:"gif"` with the Giphy URL (hot-linked, not re-hosted); photos
+compress to JPEG and send `type:"image"`. All media is a plain
+`MessageRepository.sendMessage` insert — `content:"" , iv:nil`, `enc_v` NULL —
+**never** the envelope RPC (media is not E2E encrypted, matching web).
 
 **Animated playback:** `MessageBubbleView` renders `gif`/`sticker` via Kingfisher
 `KFAnimatedImage` (real animation + disk cache); still images via `KFImage`.
@@ -594,7 +624,7 @@ no picker tab. The user inserts a sticker that already exists on the device
 (system Stickers drawer, Memoji, Markup, iOS 18 Genmoji):
 - **Drag & drop** onto the conversation — `ChatView.onDrop(of: [.image])` →
   `handleDroppedProviders`. A "Drop to send" overlay shows while targeted.
-- **Paste** — `MessageInputView` shows a `PasteButton` (next to the paperclip)
+- **Paste** — `MessageInputView` shows a `PasteButton` (next to the `+` toggle)
   when `UIPasteboard.general.hasImages`; wired to `onPasteImage`.
 - **Sticker vs photo:** `UIImage.hasAlpha` → transparent means sticker
   (`ChatViewModel.sendStickerMessage`, PNG to `media` bucket, `type:"sticker"`,

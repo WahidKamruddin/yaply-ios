@@ -95,9 +95,9 @@ struct ThreadView: View {
                             messageText = ""
                             Task { await vm.sendReply(text: text) }
                         },
-                        onAttachment: { },
                         onCancelReply: { },
-                        disabled: vm.isSending
+                        disabled: vm.isSending,
+                        showAttachments: false
                     )
                 }
             }

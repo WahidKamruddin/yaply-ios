@@ -2,12 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key> Privacy - Photo Library Usage Description</key>
+	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Yaply needs photo access to share images.</string>
 	<key>GIPHY_API_KEY</key>
 	<string>$(GIPHY_API_KEY)</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Yaply uses the camera to scan a pairing QR code when linking another device.</string>
+	<string>Yaply uses the camera to take photos to send and to scan a pairing QR code when linking another device.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Yaply uses the microphone to record voice messages.</string>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>Yaply uses notifications for reminders.</string>
 	<key>SUPABASE_ANON_KEY</key>

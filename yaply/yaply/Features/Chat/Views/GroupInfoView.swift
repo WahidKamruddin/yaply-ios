@@ -6,8 +6,14 @@ struct GroupInfoView: View {
     let conversationId: UUID
     let conversationName: String
     let currentUserId: UUID
+    var isDirect: Bool = false
+    var headerAvatarUrl: String? = nil
     let onRefresh: () async -> Void
     var onDeleted: (() -> Void)? = nil
+
+    @State private var profileToView: MemberId? = nil
+
+    private struct MemberId: Identifiable { let id: UUID }
 
     @State private var members: [MemberSummary] = []
     @State private var isLoading = false
@@ -20,7 +26,15 @@ struct GroupInfoView: View {
     @State private var memberToPromote: MemberSummary? = nil
     @State private var showDeleteGroupConfirm = false
     @State private var isDeletingGroup = false
+    @State private var isMuted = false
+    @State private var muteStateLoaded = false
+    @State private var isBusy = false
+    @State private var showLeaveConfirm = false
+    @State private var showBlockConfirm = false
     @Environment(\.dismiss) private var dismiss
+
+    private var otherUserId: UUID? { members.first(where: { $0.userId != currentUserId })?.userId }
+    private var leaveLabel: String { isDirect ? "Delete Chat" : "Leave Group" }
 
     private let convRepository = ConversationRepository()
     private let friendsRepository = FriendsRepository()
@@ -37,11 +51,11 @@ struct GroupInfoView: View {
                     HStack {
                         Spacer()
                         VStack(spacing: 8) {
-                            AvatarView(url: nil, name: conversationName, size: 64)
+                            AvatarView(url: isDirect ? headerAvatarUrl : nil, name: conversationName, size: 64)
                             Text(conversationName)
                                 .font(.title3.bold())
                                 .foregroundStyle(Color.yaplyPrimary)
-                            Text("\(members.count) member\(members.count == 1 ? "" : "s")")
+                            Text(isDirect ? "Direct message" : "\(members.count) member\(members.count == 1 ? "" : "s")")
                                 .font(.subheadline)
                                 .foregroundStyle(Color.yaplySecondary)
                         }
@@ -112,12 +126,47 @@ struct GroupInfoView: View {
                                     }
                                 }
                             }
+                            .contentShape(Rectangle())
+                            .onTapGesture { profileToView = MemberId(id: member.userId) }
                         }
                     }
                 }
 
+                // Chat settings
+                Section("Settings") {
+                    Toggle(isOn: $isMuted) {
+                        Label("Mute notifications", systemImage: "bell.slash")
+                            .foregroundStyle(Color.yaplyPrimary)
+                    }
+                    .tint(Color.yaplyAccent)
+                    .disabled(isBusy)
+                    .onChange(of: isMuted) { _, on in
+                        guard muteStateLoaded else { return }
+                        Task { await setMute(on) }
+                    }
+                }
+
+                Section {
+                    if isDirect {
+                        Button(role: .destructive) { showBlockConfirm = true } label: {
+                            Label("Block User", systemImage: "hand.raised.fill")
+                        }
+                        .disabled(isBusy)
+                    }
+                    Button(role: .destructive) { showLeaveConfirm = true } label: {
+                        Label(leaveLabel, systemImage: "trash")
+                    }
+                    .disabled(isBusy)
+                } footer: {
+                    Text(isDirect
+                         ? "Deletes this conversation and its messages for you."
+                         : "Removes you from the group. You'll lose access to its messages.")
+                        .font(.caption)
+                        .foregroundStyle(Color.yaplySecondary)
+                }
+
                 // Delete group section (admin/owner only)
-                if currentMemberIsAdmin {
+                if currentMemberIsAdmin && !isDirect {
                     Section {
                         Button(role: .destructive) {
                             showDeleteGroupConfirm = true
@@ -140,7 +189,7 @@ struct GroupInfoView: View {
                 }
 
                 // Add member section (admin/owner only)
-                if currentMemberIsAdmin {
+                if currentMemberIsAdmin && !isDirect {
                     Section("Add member") {
                         HStack {
                             Image(systemName: "magnifyingglass")
@@ -180,8 +229,11 @@ struct GroupInfoView: View {
                     }
                 }
             }
-            .navigationTitle("Group Info")
+            .navigationTitle(isDirect ? "Chat Settings" : "Group Info")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(item: $profileToView) { m in
+                ProfileView(userId: m.id, viewerId: currentUserId)
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -225,7 +277,30 @@ struct GroupInfoView: View {
             ) {
                 Task { await deleteGroupForEveryone() }
             }
-            .task { await loadMembers() }
+            .yaplyConfirm(
+                isPresented: $showLeaveConfirm,
+                title: isDirect ? "Delete chat?" : "Leave group?",
+                message: isDirect
+                    ? "This conversation and its messages will be removed for you."
+                    : "You'll be removed from \"\(conversationName)\" and lose access to its messages.",
+                icon: "trash.fill",
+                confirmLabel: isDirect ? "Delete" : "Leave"
+            ) {
+                Task { await leaveConversation() }
+            }
+            .yaplyConfirm(
+                isPresented: $showBlockConfirm,
+                title: "Block \(conversationName)?",
+                message: "They won't be able to message you, and you won't see their messages. They won't be notified.",
+                icon: "hand.raised.fill",
+                confirmLabel: "Block"
+            ) {
+                Task { await blockOtherUser() }
+            }
+            .task {
+                await loadMembers()
+                await loadMuteState()
+            }
         }
     }
 
@@ -313,6 +388,72 @@ struct GroupInfoView: View {
         } catch {
             isDeletingGroup = false
             self.error = error.localizedDescription
+        }
+    }
+
+    // MARK: - Chat settings
+
+    /// Muted-forever sentinel — matches the web's 8_640_000_000_000 ms epoch.
+    private static let muteForever = Date(timeIntervalSince1970: 8_640_000_000)
+
+    private func loadMuteState() async {
+        struct MuteRow: Decodable {
+            let mutedUntil: Date?
+            enum CodingKeys: String, CodingKey { case mutedUntil = "muted_until" }
+        }
+        guard let row: MuteRow = try? await supabase
+            .from("conversation_members")
+            .select("muted_until")
+            .eq("conversation_id", value: conversationId.uuidString)
+            .eq("user_id", value: currentUserId.uuidString)
+            .single()
+            .execute()
+            .value
+        else { muteStateLoaded = true; return }
+        if let until = row.mutedUntil {
+            isMuted = until > Date()
+        }
+        muteStateLoaded = true
+    }
+
+    private func setMute(_ on: Bool) async {
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            try await convRepository.muteConversation(
+                conversationId: conversationId,
+                userId: currentUserId,
+                until: on ? Self.muteForever : nil
+            )
+            await onRefresh()
+        } catch {
+            isMuted = !on
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func leaveConversation() async {
+        isBusy = true
+        do {
+            try await convRepository.deleteConversation(conversationId: conversationId, userId: currentUserId)
+            dismiss()
+            onDeleted?()
+        } catch {
+            isBusy = false
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func blockOtherUser() async {
+        guard let otherUserId else { return }
+        isBusy = true
+        do {
+            try await friendsRepository.blockUser(userId: otherUserId)
+            dismiss()
+            onDeleted?()
+        } catch {
+            isBusy = false
+            self.error = friendlyFriendsError(error)
         }
     }
 }
