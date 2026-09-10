@@ -549,9 +549,13 @@ Implemented — `Features/Friends/`: `Repositories/FriendsRepository.swift` (all
 ## Message long-press actions (Messenger / Instagram style)
 
 Long-pressing a bubble (`MessageBubbleView.onLongPress`, 0.3s + haptic) opens
-`MessageActionsOverlay` — a full-screen `.ultraThinMaterial` scrim with three
-stacked pieces, roughly anchored to the tapped bubble (`BubbleAnchorKey`
-preference records each bubble's global `midY`; `ChatView` clamps it):
+`MessageActionsOverlay` — a full-screen `.ultraThinMaterial` scrim. The tapped
+bubble **stays exactly in place**: `BubbleAnchorKey` records each bubble's global
+`CGRect` (measured on `bubbleContent`, not the whole row), the original is
+`.opacity(0)`'d, and the overlay renders a pixel-aligned `BubbleContentView` copy
+at that rect. The reaction rail floats just above it and the action card just
+below; the group only slides vertically (`verticalShift`) if the rail or card
+would clip off screen (card visibility wins). Three pieces:
 
 - **Reaction rail** (top, horizontal): the user's 6 personalized emoji +
   a `+`. Tapping one applies it (`ChatViewModel.setReaction`, single-reaction).

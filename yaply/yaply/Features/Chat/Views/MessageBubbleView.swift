@@ -127,6 +127,14 @@ struct MessageBubbleView: View {
                     }
 
                     bubbleContent
+                        .background(
+                            GeometryReader { g in
+                                Color.clear.preference(
+                                    key: BubbleAnchorKey.self,
+                                    value: [message.id: g.frame(in: .global)]
+                                )
+                            }
+                        )
                         .onLongPressGesture(minimumDuration: 0.3) {
                             guard !message.isDeleted else { return }
                             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
