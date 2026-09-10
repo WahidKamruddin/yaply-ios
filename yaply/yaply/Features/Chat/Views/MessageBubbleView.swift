@@ -287,6 +287,8 @@ struct MessageBubbleView: View {
         case "sticker": return "Sticker"
         case "gif": return "GIF"
         case "image": return "📷 Photo"
+        case "voice": return "🎤 Voice message"
+        case "file": return "📎 File"
         default: return String(reply.content.prefix(60))
         }
     }
@@ -347,6 +349,10 @@ struct BubbleContentView: View {
         } else if message.type == "gif", let urlString = message.mediaUrl, let url = URL(string: urlString) {
             // No bubble — a plain rounded card that hugs the GIF, matching the web app.
             AnimatedGifView(url: url)
+        } else if message.type == "voice", let url = message.mediaUrl.flatMap(URL.init) {
+            VoiceMessageBubble(url: url, isOwn: isOwn)
+        } else if message.type == "file", let url = message.mediaUrl.flatMap(URL.init) {
+            FileAttachmentBubble(url: url, isOwn: isOwn)
         } else if message.isMedia, let urlString = message.mediaUrl, let url = URL(string: urlString) {
             // No bubble — a plain rounded card, matching the web app.
             KFImage(url)
@@ -432,6 +438,69 @@ private struct AnimatedGifView: View {
             .aspectRatio(aspect ?? 1, contentMode: .fit)
             .frame(maxWidth: 240, maxHeight: 300)
             .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+// MARK: - File attachment
+
+/// A compact pill for a `type: "file"` message — icon + filename, opens the
+/// public media URL on tap (Safari / QuickLook).
+private struct FileAttachmentBubble: View {
+    let url: URL
+    let isOwn: Bool
+    @Environment(\.openURL) private var openURL
+
+    private var filename: String {
+        let raw = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
+        // Uploads are stored as "<uuid>-<original name>" — strip the uuid prefix.
+        if let dash = raw.firstIndex(of: "-"),
+           UUID(uuidString: String(raw[raw.startIndex..<dash])) != nil {
+            return String(raw[raw.index(after: dash)...])
+        }
+        return raw
+    }
+
+    var body: some View {
+        Button {
+            openURL(url)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "doc.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(isOwn ? .white : Color.yaplyAccent)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(filename)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(isOwn ? .white : Color.yaplyPrimary)
+                        .lineLimit(1)
+                    Text("Tap to open")
+                        .font(.system(size: 11))
+                        .foregroundStyle(isOwn ? Color.white.opacity(0.8) : Color.yaplySecondary)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: 220, alignment: .leading)
+            .background(
+                Group {
+                    if isOwn {
+                        LinearGradient(
+                            colors: [Color.yaplyAccent, Color.yaplyAccentDark],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    } else {
+                        Color.yaplyCard
+                    }
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(isOwn ? Color.clear : Color.yaplyBorderSoft, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 

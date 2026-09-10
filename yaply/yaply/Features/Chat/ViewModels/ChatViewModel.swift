@@ -400,6 +400,64 @@ final class ChatViewModel {
         }
     }
 
+    /// Send a recorded voice message. Uploaded as an `.m4a` to the `media`
+    /// bucket and sent unencrypted (`type: "voice"`, `content: ""`), same path
+    /// as image/gif/sticker — never the envelope RPC.
+    func sendVoiceMessage(fileURL: URL) async {
+        let tempId = UUID()
+        messages.append(DecryptedMessage(
+            id: tempId, conversationId: conversationId, senderId: currentUserId,
+            content: "", type: "voice", mediaUrl: nil, createdAt: Date()
+        ))
+
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let url = try await uploadService.uploadFile(
+                data, filename: "voice-message.m4a", mimeType: "audio/mp4", userId: currentUserId
+            )
+            let params = SendMessageParams(
+                conversationId: conversationId, senderId: currentUserId,
+                content: "", iv: nil, type: "voice", mediaUrl: url, mediaMime: "audio/mp4"
+            )
+            let sent = try await repository.sendMessage(params)
+            if messages.contains(where: { $0.id == sent.id }) {
+                messages.removeAll { $0.id == tempId }
+            } else if let idx = messages.firstIndex(where: { $0.id == tempId }) {
+                messages[idx] = DecryptedMessage(
+                    id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
+                    content: "", type: "voice", mediaUrl: url, createdAt: sent.createdAt
+                )
+            }
+        } catch {
+            messages.removeAll { $0.id == tempId }
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// Send an arbitrary file attachment (`type: "file"`). Web renders this as a
+    /// download link. Not E2E encrypted.
+    func sendFileMessage(data: Data, filename: String, mimeType: String) async {
+        isSending = true
+        defer { isSending = false }
+        do {
+            let url = try await uploadService.uploadFile(
+                data, filename: filename, mimeType: mimeType, userId: currentUserId
+            )
+            let params = SendMessageParams(
+                conversationId: conversationId, senderId: currentUserId,
+                content: "", iv: nil, type: "file", mediaUrl: url, mediaMime: mimeType
+            )
+            let sent = try await repository.sendMessage(params)
+            messages.append(DecryptedMessage(
+                id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
+                content: "", type: "file", mediaUrl: url, createdAt: sent.createdAt
+            ))
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     // MARK: - Delete
 
     func deleteMessage(id: UUID) async {

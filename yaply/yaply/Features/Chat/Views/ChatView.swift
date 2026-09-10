@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 import UniformTypeIdentifiers
 
 struct ChatView: View {
@@ -9,7 +10,12 @@ struct ChatView: View {
 
     @State private var vm: ChatViewModel
     @State private var messageText = ""
-    @State private var showMedia = false
+    @State private var showExpression = false
+    @State private var showCamera = false
+    @State private var showPhotoPicker = false
+    @State private var showFileImporter = false
+    @State private var recordingVoice = false
+    @State private var photoItem: PhotosPickerItem?
     @State private var threadRoot: DecryptedMessage?
     @State private var scrollToId: UUID?
     @State private var highlightedId: UUID?
@@ -21,7 +27,7 @@ struct ChatView: View {
     @State private var viewportHeight: CGFloat = 1
     @State private var newMsgCount = 0
     @State private var commandFeedback: String?
-    @State private var showProfile = false
+    @State private var comingSoon = false
 
     private var isNearBottom: Bool { distFromBottom <= viewportHeight }
     private var showScrollButton: Bool { distFromBottom > viewportHeight }
@@ -301,6 +307,14 @@ struct ChatView: View {
                         onAccepted: { vm.setMyRequestState("accepted") },
                         onDeclinedOrBlocked: { router.pop() }
                     )
+                } else if recordingVoice {
+                    VoiceRecorderBar(
+                        onCancel: { recordingVoice = false },
+                        onSend: { url, _ in
+                            recordingVoice = false
+                            Task { await vm.sendVoiceMessage(fileURL: url) }
+                        }
+                    )
                 } else {
                     MessageInputView(
                         text: $messageText,
@@ -316,9 +330,19 @@ struct ChatView: View {
                                 Task { await vm.sendMessage(text: rawText) }
                             }
                         },
-                        onAttachment: { showMedia = true },
                         onCancelReply: { vm.replyToMessage = nil },
                         disabled: vm.isSending,
+                        onPickFile: { showFileImporter = true },
+                        onPickCamera: {
+                            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                                showCamera = true
+                            } else {
+                                showPhotoPicker = true
+                            }
+                        },
+                        onPickImage: { showPhotoPicker = true },
+                        onStartVoice: { recordingVoice = true },
+                        onEmoji: { showExpression = true },
                         onTyping: { vm.notifyTyping() },
                         onStopTyping: { vm.notifyStopTyping() },
                         onPasteImage: { image in
@@ -421,47 +445,18 @@ struct ChatView: View {
                     }
                 }
                 .contentShape(Rectangle())
-                .onTapGesture {
-                    if !vm.isGroupConversation && currentOtherMember != nil { showProfile = true }
-                }
+                .onTapGesture { showGroupInfo = true }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
-                HStack(spacing: 10) {
-                    Button {
+                HStack(spacing: 4) {
+                    pillButton(systemName: searchIsActive ? "xmark" : "magnifyingglass",
+                               filled: searchIsActive) {
                         withAnimation(.easeInOut(duration: 0.2)) { searchIsActive.toggle() }
                         if !searchIsActive { searchQuery = "" }
-                    } label: {
-                        Image(systemName: searchIsActive ? "xmark" : "magnifyingglass")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(searchIsActive ? .white : Color.yaplyAccent)
-                            .frame(width: 30, height: 30)
-                            .background(searchIsActive ? Color.yaplyAccent : Color.clear)
-                            .clipShape(Circle())
                     }
-                    Button {
-                        openPanel("tasks")
-                    } label: {
-                        Image(systemName: "list.bullet.rectangle.portrait")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Color.yaplyAccent)
-                            .frame(width: 30, height: 30)
-                            .clipShape(Circle())
-                    }
-                    if vm.isGroupConversation {
-                        Button { showGroupInfo = true } label: {
-                            Image(systemName: "info.circle")
-                                .font(.system(size: 16))
-                                .foregroundStyle(Color.yaplyAccent)
-                        }
-                    } else {
-                        Button { showProfile = true } label: {
-                            AvatarView(
-                                url: currentOtherMember?.profile.avatarUrl,
-                                name: displayName,
-                                size: 32
-                            )
-                        }
-                    }
+                    pillButton(systemName: "phone") { comingSoon = true }
+                    pillButton(systemName: "video") { comingSoon = true }
+                    pillButton(systemName: "sidebar.right") { openPanel("tasks") }
                 }
             }
         }
@@ -473,21 +468,52 @@ struct ChatView: View {
         .task {
             try? await convRepository.markRead(conversationId: conversationId, userId: currentUserId)
         }
-        .sheet(isPresented: $showMedia) {
-            MediaPickerView(
-                onImageSelected: { data, mime in
-                    Task { await vm.sendImageMessage(imageData: data, mimeType: mime) }
-                },
-                onGifSelected: { gif in
-                    Task { await vm.sendGifMessage(url: gif.url) }
+        .sheet(isPresented: $showExpression) {
+            ExpressionPickerSheet(onGifSelected: { gif in
+                Task { await vm.sendGifMessage(url: gif.url) }
+            })
+        }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker { image in
+                let resized = image.resized(maxDimension: 1280)
+                if let jpeg = resized.jpegData(compressionQuality: 0.82) {
+                    Task { await vm.sendImageMessage(imageData: jpeg, mimeType: "image/jpeg") }
                 }
-            )
+            }
+            .ignoresSafeArea()
+        }
+        .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let original = UIImage(data: data) {
+                    let resized = original.resized(maxDimension: 1280)
+                    let compressed = resized.jpegData(compressionQuality: 0.82) ?? data
+                    await vm.sendImageMessage(imageData: compressed, mimeType: "image/jpeg")
+                }
+                photoItem = nil
+            }
+        }
+        .fileImporter(
+            isPresented: $showFileImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case let .success(urls) = result, let url = urls.first else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url) else { return }
+            let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+            Task { await vm.sendFileMessage(data: data, filename: url.lastPathComponent, mimeType: mime) }
         }
         .sheet(isPresented: $showGroupInfo) {
             GroupInfoView(
                 conversationId: conversationId,
-                conversationName: conversationName,
+                conversationName: displayName,
                 currentUserId: currentUserId,
+                isDirect: !vm.isGroupConversation,
+                headerAvatarUrl: vm.isGroupConversation ? nil : currentOtherMember?.profile.avatarUrl,
                 onRefresh: { await vm.loadConversationInfo() },
                 onDeleted: { router.pop() }
             )
@@ -511,10 +537,22 @@ struct ChatView: View {
         .sheet(isPresented: $showHelp) {
             HelpView()
         }
-        .sheet(isPresented: $showProfile) {
-            if let otherId = currentOtherMember?.userId {
-                ProfileView(userId: otherId, viewerId: currentUserId)
-            }
+        .yaplyAlert(
+            isPresented: $comingSoon,
+            title: "Coming soon",
+            message: "Voice and video calls aren't available yet."
+        )
+    }
+
+    @ViewBuilder
+    private func pillButton(systemName: String, filled: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(filled ? .white : Color.yaplyAccent)
+                .frame(width: 30, height: 30)
+                .background(filled ? Color.yaplyAccent : Color.clear)
+                .clipShape(Circle())
         }
     }
 
@@ -758,6 +796,8 @@ private struct PinnedBannerView: View {
         case "sticker": return "Sticker"
         case "gif": return "GIF"
         case "image": return "📷 Photo"
+        case "voice": return "🎤 Voice message"
+        case "file": return "📎 File"
         default: return message.content
         }
     }

@@ -217,7 +217,7 @@ private struct EventRowView: View {
     var body: some View {
         HStack(spacing: 12) {
             ZStack {
-                RoundedRectangle(cornerRadius: 8)
+                Circle()
                     .fill(event.isPlanning ? Color.yaplyBackground : Color.yaplyConfirmedGreen)
                     .frame(width: 36, height: 36)
                 Image(systemName: event.isPlanning ? "map" : "calendar")
@@ -232,22 +232,12 @@ private struct EventRowView: View {
                             .foregroundStyle(Color.orange)
                     }
                     Text(event.name)
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: 15))
                         .foregroundStyle(Color.yaplyPrimary)
                 }
-                HStack(spacing: 6) {
-                    if event.isPlanning {
-                        Text("Planning")
-                            .font(.system(size: 11, weight: .semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.yaplyBackground)
-                            .foregroundStyle(Color.yaplyAccent)
-                            .clipShape(Capsule())
-                    }
+                HStack(spacing: 4) {
                     if let starts = event.startsAt, event.isConfirmed {
-                        Text(starts.formatted(.dateTime.month(.abbreviated).day()))
-                            .font(.caption)
+                        Text(starts.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
                             .foregroundStyle(Color.yaplySecondary)
                         if isCurrentUserAdmin {
                             Button(action: {
@@ -260,12 +250,18 @@ private struct EventRowView: View {
                             }
                             .buttonStyle(.plain)
                         }
+                    } else {
+                        Text("Planning")
+                            .foregroundStyle(Color.yaplyAccent)
                     }
+                    Text("·")
+                        .foregroundStyle(Color.yaplySecondary.opacity(0.4))
+                    Text("by \(event.creator?.name ?? "Unknown")")
+                        .foregroundStyle(Color.yaplySecondary)
                 }
-                Text("by \(event.creator?.name ?? "Unknown")")
-                    .font(.caption)
-                    .foregroundStyle(Color.yaplySecondary.opacity(0.7))
+                .font(.caption)
             }
+            Spacer()
         }
         .padding(.vertical, 4)
         .yaplyPopup(isPresented: $showEditStartsAt) {
