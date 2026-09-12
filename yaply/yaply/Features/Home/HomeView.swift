@@ -1,7 +1,11 @@
 import SwiftUI
 
 // The Home tab — mirrors web's Dashboard.tsx: a greeting, quick-create
-// actions, and cross-conversation Reminders / Events / Friends feeds.
+// actions, and cross-conversation Reminders / Events / Notes / Friends feeds.
+// Web also shows a "Your snippets" stickers grid here; iOS has no yaply
+// sticker library at all yet (Stickers is still a "coming soon" tab in
+// ExpressionPickerSheet, same unbuilt state as Voice notes), so there is
+// nothing to surface — only Notes carries over.
 struct HomeView: View {
     let currentUserId: UUID
     let conversations: [ConversationListItem]
@@ -54,10 +58,27 @@ struct HomeView: View {
                             .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.yaplyBorder))
                     }
                     .buttonStyle(.plain)
+
+                    Button {
+                        creating = .note
+                    } label: {
+                        Label("Note", systemImage: "plus")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.yaplyPrimary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(Color.yaplyTint)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.yaplyBorder))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(conversations.isEmpty)
+                    .opacity(conversations.isEmpty ? 0.4 : 1)
                 }
 
                 remindersCard
                 eventsCard
+                notesCard
                 friendsCard
 
                 HStack(spacing: 6) {
@@ -156,6 +177,50 @@ struct HomeView: View {
                                     Text("\(event.isPlanning ? "Planning" : event.startsAt.map(HomeViewModel.relativeTime) ?? "") · \(conversationLabel(event.conversationId))")
                                         .font(.caption)
                                         .foregroundStyle(Color.yaplySecondary)
+                                }
+                                Spacer()
+                            }
+                            .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Notes
+
+    private var notesCard: some View {
+        cardShell(icon: "note.text", title: "Notes") {
+            if vm.isLoading {
+                VStack(spacing: 2) {
+                    ForEach(0..<2, id: \.self) { i in
+                        DashboardRowSkeleton(delay: Double(i) * 0.06)
+                    }
+                }
+            } else if vm.notes.isEmpty {
+                emptyRow("No notes yet")
+            } else {
+                VStack(spacing: 2) {
+                    ForEach(vm.notes) { note in
+                        Button {
+                            if let cid = note.conversationId { onOpenConversation(cid) }
+                        } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: "doc.text")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Color.yaplySecondary)
+                                    .padding(.top, 2)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(note.title.isEmpty ? "Untitled note" : note.title)
+                                        .font(.subheadline)
+                                        .foregroundStyle(Color.yaplyPrimary)
+                                        .lineLimit(1)
+                                    Text(note.conversationId.map(conversationLabel) ?? "Unknown chat")
+                                        .font(.caption)
+                                        .foregroundStyle(Color.yaplySecondary)
+                                        .lineLimit(1)
                                 }
                                 Spacer()
                             }

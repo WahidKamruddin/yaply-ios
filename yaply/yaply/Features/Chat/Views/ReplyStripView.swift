@@ -4,17 +4,15 @@ struct ReplyStripView: View {
     let message: DecryptedMessage
     let onDismiss: () -> Void
 
+    // Plain text, no highlight/accent bar. Top padding gives it breathing
+    // room from the message list above (it has no background/divider of its
+    // own to create that separation).
     var body: some View {
         HStack(spacing: 10) {
-            Rectangle()
-                .fill(Color.yaplyAccent)
-                .frame(width: 3)
-                .clipShape(Capsule())
-
             VStack(alignment: .leading, spacing: 2) {
-                Text(message.senderProfile?.name ?? "Message")
+                Text("Replying to \(message.senderProfile?.name ?? "message")")
                     .font(.caption)
-                    .fontWeight(.semibold)
+                    .fontWeight(.medium)
                     .foregroundStyle(Color.yaplyAccent)
                 Text(message.isDeleted ? "Message deleted" : message.content)
                     .font(.caption)
@@ -31,13 +29,7 @@ struct ReplyStripView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.yaplyBackground)
-        .overlay(
-            Rectangle()
-                .fill(Color.yaplyBorder)
-                .frame(height: 1),
-            alignment: .top
-        )
+        .padding(.top, 12)
+        .padding(.bottom, 8)
     }
 }

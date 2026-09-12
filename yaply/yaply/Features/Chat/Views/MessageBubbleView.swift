@@ -1,5 +1,6 @@
 import SwiftUI
 import Kingfisher
+import UIKit // NSString.boundingRect for reply-quote width estimation
 
 // Tab names that match ConversationDetailView tab IDs
 private let systemMessageTabMap: [(pattern: String, tab: String)] = [
@@ -19,6 +20,7 @@ private func systemMessageTab(for content: String) -> String? {
 struct MessageBubbleView: View {
     let message: DecryptedMessage
     let isOwn: Bool
+    let currentUserId: UUID
     var replyMessage: DecryptedMessage?
     var threadCount: Int = 0
     var isRead: Bool? = nil
@@ -37,6 +39,17 @@ struct MessageBubbleView: View {
 
     @State private var replyDragOffset: CGFloat = 0
     @State private var hasTriggeredReply = false
+    // Actual rendered height of the underlap quote bubble, measured via
+    // ReplyQuoteHeightKey so the main bubble's half-height offset is exact
+    // regardless of font metrics or Dynamic Type — 64 is a sane fallback
+    // (8pt top pad + ~16pt line + 40pt bottom pad, matching web's spec)
+    // before the first layout pass reports the real value.
+    @State private var replyQuoteHeight: CGFloat = 64
+    // Width actually available to this row's bubble column, measured via
+    // ReplyAvailableWidthKey — used to estimate how wide the *original*
+    // (replied-to) message's own bubble rendered at. 220 is a sane fallback
+    // before the first layout pass reports the real value.
+    @State private var replyAvailableWidth: CGFloat = 220
 
     var body: some View {
         Group {
@@ -123,23 +136,21 @@ struct MessageBubbleView: View {
                     }
 
                     if let reply = replyMessage {
-                        replyBlock(reply)
-                    }
+                        replyLabelView(reply)
 
-                    bubbleContent
-                        .background(
-                            GeometryReader { g in
-                                Color.clear.preference(
-                                    key: BubbleAnchorKey.self,
-                                    value: [message.id: g.frame(in: .global)]
-                                )
+                        if replyCanUnderlap(reply) {
+                            ZStack(alignment: isOwn ? .topTrailing : .topLeading) {
+                                replyQuoteUnderlap(reply)
+                                decoratedBubbleContent.padding(.top, replyQuoteHeight / 2)
                             }
-                        )
-                        .onLongPressGesture(minimumDuration: 0.3) {
-                            guard !message.isDeleted else { return }
-                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                            onLongPress?(message)
+                            .onPreferenceChange(ReplyQuoteHeightKey.self) { replyQuoteHeight = $0 }
+                        } else {
+                            replyQuotePill(reply)
+                            decoratedBubbleContent
                         }
+                    } else {
+                        decoratedBubbleContent
+                    }
 
                     if !reactions.isEmpty {
                         reactionPills
@@ -168,6 +179,12 @@ struct MessageBubbleView: View {
                             .padding(.horizontal, 4)
                     }
                 }
+                .background(
+                    GeometryReader { g in
+                        Color.clear.preference(key: ReplyAvailableWidthKey.self, value: g.size.width)
+                    }
+                )
+                .onPreferenceChange(ReplyAvailableWidthKey.self) { replyAvailableWidth = $0 }
                 .offset(x: !isOwn ? replyDragOffset : 0)
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 10)
@@ -248,49 +265,178 @@ struct MessageBubbleView: View {
         BubbleContentView(message: message, isOwn: isOwn)
     }
 
-    // MARK: - Reply preview block
-
-    private func replyBlock(_ reply: DecryptedMessage) -> some View {
-        Button {
-            onQuotationClick?(reply.id)
-        } label: {
-            HStack(spacing: 2) {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(Color.yaplyAccent)
-                    .frame(width: 2, height: 22)
-                    .padding(.horizontal, 6)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(reply.senderProfile?.name ?? "Unknown")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.yaplyAccent)
-                        .lineLimit(1)
-                    Text(replyPreview(reply))
-                        .font(.system(size: 12))
-                        .italic(reply.isDeleted)
-                        .foregroundStyle(reply.isDeleted ? Color.yaplySecondary.opacity(0.7) : Color.yaplySecondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+    /// `bubbleContent` plus the anchor-tracking + long-press modifiers every
+    /// reply layout (underlap or plain-pill) needs applied identically.
+    private var decoratedBubbleContent: some View {
+        bubbleContent
+            .background(
+                GeometryReader { g in
+                    Color.clear.preference(
+                        key: BubbleAnchorKey.self,
+                        value: [message.id: g.frame(in: .global)]
+                    )
                 }
-                .padding(.trailing, 14)
+            )
+            .onLongPressGesture(minimumDuration: 0.3) {
+                guard !message.isDeleted else { return }
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                onLongPress?(message)
             }
-            .frame(height: 36)
-            .background(Color.yaplyTint)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.yaplyBorderSoft, lineWidth: 0.5))
+    }
+
+    // MARK: - Reply label ("X replied to Y")
+
+    /// Frameless media (GIFs/stickers) as the main bubble has no solid
+    /// background to hide the quote's bottom edge behind, so it keeps the
+    /// old floating-pill placement instead of underlapping.
+    private func replyCanUnderlap(_ reply: DecryptedMessage) -> Bool {
+        !((message.type == "sticker" || message.type == "gif") && message.mediaUrl != nil)
+    }
+
+    private func replyLabel(_ reply: DecryptedMessage) -> String {
+        let subject = isOwn ? "You" : (message.senderProfile?.name ?? "Deleted user")
+        let object: String
+        if reply.senderId == currentUserId {
+            object = isOwn ? "yourself" : "you"
+        } else if !isOwn && reply.senderId == message.senderId {
+            object = "themselves"
+        } else {
+            object = reply.senderProfile?.name ?? "Deleted user"
         }
-        .buttonStyle(.plain)
+        return "\(subject) replied to \(object)"
+    }
+
+    private func replyLabelView(_ reply: DecryptedMessage) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "arrowshape.turn.up.left")
+                .font(.system(size: 9))
+            Text(replyLabel(reply))
+                .font(.system(size: 10))
+        }
+        .foregroundStyle(Color.yaplySecondary)
+        .padding(.horizontal, 4)
+    }
+
+    // MARK: - Reply quote bubble
+
+    /// Preview text for the quote, shared by both layouts. Sender name is
+    /// intentionally omitted — the label above already says who replied to
+    /// whom.
+    private func replyPreviewText(_ reply: DecryptedMessage) -> some View {
+        Text(reply.isDeleted ? "Message deleted" : replyPreview(reply))
+            .font(.system(size: 12))
+            .italic(reply.isDeleted)
+            .foregroundStyle(reply.isDeleted ? Color.yaplySecondary : Color.yaplyTertiary)
+            .lineLimit(1)
+            .truncationMode(.tail)
     }
 
     private func replyPreview(_ reply: DecryptedMessage) -> String {
         if reply.isDeleted { return "Message deleted" }
         switch reply.type {
-        case "sticker": return "Sticker"
+        case "image", "sticker": return "📷 Photo"
         case "gif": return "GIF"
-        case "image": return "📷 Photo"
         case "voice": return "🎤 Voice message"
         case "file": return "📎 File"
-        default: return String(reply.content.prefix(60))
+        default:
+            if reply.decryptFailed { return "🔒 Encrypted message" }
+            return String(reply.content.prefix(80))
         }
+    }
+
+    /// Reproduces `BubbleContentView`'s plain-text bubble metrics (15pt
+    /// system font, 14pt horizontal padding) to estimate how wide the
+    /// *original* message's own bubble rendered at, so the quote can match
+    /// its footprint instead of hugging the (smaller-font, truncated)
+    /// preview text or the new reply's own bubble width.
+    private func naturalBubbleWidth(for text: String, maxContentWidth: CGFloat) -> CGFloat {
+        let font = UIFont.systemFont(ofSize: 15)
+        let horizontalPadding: CGFloat = 28 // matches BubbleContentView's .padding(.horizontal, 14) × 2
+        let availableForText = max(0, maxContentWidth - horizontalPadding)
+        let bounding = (text as NSString).boundingRect(
+            with: CGSize(width: availableForText, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font],
+            context: nil
+        )
+        return min(availableForText, ceil(bounding.width)) + horizontalPadding
+    }
+
+    /// Width the quote should render at, or `nil` to just hug its own short
+    /// fixed label — only original **text** messages have a meaningful "own
+    /// bubble width" to match; deleted/decrypt-failed/media previews are
+    /// always a short fixed string with nothing to match.
+    private func replyQuoteWidth(_ reply: DecryptedMessage) -> CGFloat? {
+        guard reply.type == "text", !reply.isDeleted, !reply.decryptFailed else { return nil }
+        let replyIsOwn = reply.senderId == currentUserId
+        // The avatar (28pt) + its 8pt spacing only reserve space on the
+        // received side; correct for the original message's row having had
+        // a different amount of available width than this reply's row.
+        let avatarAdjustment: CGFloat = (isOwn == replyIsOwn) ? 0 : (isOwn ? -36 : 36)
+        return naturalBubbleWidth(for: reply.content, maxContentWidth: replyAvailableWidth + avatarAdjustment)
+    }
+
+    /// Frameless-media case: a plain pill above the bubble, normal flow.
+    private func replyQuotePill(_ reply: DecryptedMessage) -> some View {
+        Button {
+            onQuotationClick?(reply.id)
+        } label: {
+            replyPreviewText(reply)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
+        .frame(width: replyQuoteWidth(reply), alignment: isOwn ? .trailing : .leading)
+        .background(Color.yaplyTint)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.yaplyBorder, lineWidth: 1))
+        .padding(.bottom, 4)
+    }
+
+    /// Underlap case: tall bottom padding gives the quote a fixed ~64pt
+    /// height; the main bubble sits at exactly half of the quote's *measured*
+    /// height (via `ReplyQuoteHeightKey`, read at the `ZStack` call site),
+    /// tucking behind the quote's lower half. Width matches the original
+    /// message's own bubble footprint (`replyQuoteWidth`), not a fixed cap.
+    private func replyQuoteUnderlap(_ reply: DecryptedMessage) -> some View {
+        Button {
+            onQuotationClick?(reply.id)
+        } label: {
+            replyPreviewText(reply)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .padding(.bottom, 40)
+        }
+        .buttonStyle(.plain)
+        .frame(width: replyQuoteWidth(reply), alignment: isOwn ? .trailing : .leading)
+        .background(Color.yaplyTint)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.yaplyBorder, lineWidth: 1))
+        .background(
+            GeometryReader { g in
+                Color.clear.preference(key: ReplyQuoteHeightKey.self, value: g.size.height)
+            }
+        )
+        .zIndex(0)
+    }
+}
+
+/// Reports the available width for a row's bubble column so the reply quote
+/// can estimate the original message's own bubble width (`replyQuoteWidth`).
+private struct ReplyAvailableWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 220
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+/// Reports the underlap quote bubble's actual rendered height so the main
+/// bubble's half-height offset (`MessageBubbleView`) is exact regardless of
+/// font metrics or Dynamic Type, mirroring `BubbleAnchorKey`'s pattern.
+private struct ReplyQuoteHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 64
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 

@@ -37,6 +37,7 @@ struct ThreadView: View {
                                     MessageBubbleView(
                                         message: vm.rootMessage,
                                         isOwn: vm.rootMessage.senderId == currentUserId,
+                                        currentUserId: currentUserId,
                                         reactions: [],
                                         onReply: { _ in },
                                         onDelete: { _ in }
@@ -65,6 +66,7 @@ struct ThreadView: View {
                                         MessageBubbleView(
                                             message: msg,
                                             isOwn: msg.senderId == currentUserId,
+                                            currentUserId: currentUserId,
                                             replyMessage: replyMessageFor(msg),
                                             reactions: [],
                                             onReply: { _ in },

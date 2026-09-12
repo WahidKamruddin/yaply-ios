@@ -25,6 +25,20 @@ struct YaplyNote: Codable, Identifiable {
 }
 
 final class NoteRepository {
+    // Unfiltered by conversation — RLS ("owner only") already scopes rows to
+    // the caller's own notes, so this returns exactly the cross-conversation
+    // set the Home dashboard needs in one round trip. Mirrors ReminderRepository
+    // .fetchAllPending / EventRepository.fetchAllRecent.
+    func fetchAllRecent(limit: Int = 20) async throws -> [YaplyNote] {
+        return try await supabase
+            .from("notes")
+            .select("*, creator:profiles!notes_user_id_fkey(display_name, username)")
+            .order("updated_at", ascending: false)
+            .limit(limit)
+            .execute()
+            .value
+    }
+
     func fetchNotes(conversationId: UUID) async throws -> [YaplyNote] {
         return try await supabase
             .from("notes")

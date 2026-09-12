@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum DashboardCreateType {
-    case reminder, event
+    case reminder, event, note
 }
 
 // Quick-create sheet reachable from the Home dashboard — mirrors web's
@@ -34,21 +34,27 @@ struct DashboardCreateView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField(type == .reminder ? "Remind me to…" : "Event name", text: $title)
+                    TextField(type == .reminder ? "Remind me to…" : type == .event ? "Event name" : "Note title", text: $title)
                     if type == .event {
                         TextField("Description (optional)", text: $description, axis: .vertical)
                             .lineLimit(2...4)
                         TextField("Location (optional)", text: $location)
                     }
+                    if type == .note {
+                        TextField("Note content (optional)", text: $description, axis: .vertical)
+                            .lineLimit(4...8)
+                    }
                 }
 
-                Section(type == .reminder ? "When" : "Date & time (leave off for a plan)") {
-                    if type == .event {
-                        Toggle("Set a date", isOn: $includeWhen)
-                    }
-                    if type == .reminder || includeWhen {
-                        DatePicker("", selection: $when, displayedComponents: [.date, .hourAndMinute])
-                            .labelsHidden()
+                if type != .note {
+                    Section(type == .reminder ? "When" : "Date & time (leave off for a plan)") {
+                        if type == .event {
+                            Toggle("Set a date", isOn: $includeWhen)
+                        }
+                        if type == .reminder || includeWhen {
+                            DatePicker("", selection: $when, displayedComponents: [.date, .hourAndMinute])
+                                .labelsHidden()
+                        }
                     }
                 }
 
@@ -87,7 +93,7 @@ struct DashboardCreateView: View {
                     Text(error).font(.caption).foregroundStyle(Color.yaplyDanger)
                 }
             }
-            .navigationTitle(type == .reminder ? "New Reminder" : "New Event")
+            .navigationTitle(type == .reminder ? "New Reminder" : type == .event ? "New Event" : "New Note")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -136,6 +142,11 @@ struct DashboardCreateView: View {
                         status: startsAt != nil ? "confirmed" : "planning",
                         startsAt: startsAt
                     )
+                }
+            case .note:
+                let repo = NoteRepository()
+                for conversationId in selected {
+                    _ = try await repo.createNote(conversationId: conversationId, userId: currentUserId, title: title, content: description)
                 }
             }
             onCreated()

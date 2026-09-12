@@ -133,6 +133,7 @@ struct ChatView: View {
                                     MessageBubbleView(
                                         message: msg,
                                         isOwn: msg.senderId == currentUserId,
+                                        currentUserId: currentUserId,
                                         replyMessage: msg.replyToId.flatMap { rid in vm.messages.first { $0.id == rid } },
                                         threadCount: threadCounts[msg.id] ?? 0,
                                         isRead: msg.senderId == currentUserId && msg.id == lastOwnMessageId ? vm.readByOtherSet.contains(msg.id) : nil,
