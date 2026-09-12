@@ -10,12 +10,14 @@ import Supabase
 final class HomeViewModel {
     private(set) var reminders: [YaplyReminder] = []
     private(set) var events: [YaplyEvent] = []
+    private(set) var notes: [YaplyNote] = []
     private(set) var friends: [Friend] = []
     private(set) var displayName: String = ""
     private(set) var isLoading = false
 
     private let reminderRepo = ReminderRepository()
     private let eventRepo = EventRepository()
+    private let noteRepo = NoteRepository()
     private let friendsRepo = FriendsRepository()
     private let conversationRepo = ConversationRepository()
 
@@ -33,6 +35,7 @@ final class HomeViewModel {
 
         async let remindersFetch = try? reminderRepo.fetchAllPending()
         async let eventsFetch = try? eventRepo.fetchAllRecent()
+        async let notesFetch = try? noteRepo.fetchAllRecent()
         async let friendsFetch = try? friendsRepo.fetchFriends(userId: userId)
         async let profileFetch: Profile? = try? await supabase
             .from("profiles")
@@ -44,6 +47,7 @@ final class HomeViewModel {
 
         reminders = await remindersFetch ?? []
         events = await eventsFetch ?? []
+        notes = await notesFetch ?? []
         friends = (await friendsFetch ?? []).sorted { $0.profile.name.localizedCaseInsensitiveCompare($1.profile.name) == .orderedAscending }
         displayName = await profileFetch?.name ?? ""
     }
