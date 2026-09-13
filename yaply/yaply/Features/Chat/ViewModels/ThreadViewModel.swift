@@ -114,7 +114,7 @@ final class ThreadViewModel {
                 InsertAction.self, schema: "public", table: "messages",
                 filter: .eq("thread_id", value: rootMessage.id.uuidString)
             )
-            try? await channel.subscribeWithError()
+            await ChatViewModel.subscribeWithRetry(channel, label: "thread-\(rootMessage.id.uuidString)")
             for await _ in inserts { await load() }
             await supabase.removeChannel(channel)
         }
