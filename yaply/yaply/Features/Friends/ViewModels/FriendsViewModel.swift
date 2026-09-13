@@ -135,7 +135,7 @@ final class FriendsViewModel {
             let inserts = channel.postgresChange(InsertAction.self, schema: "public", table: "friendships")
             let updates = channel.postgresChange(UpdateAction.self, schema: "public", table: "friendships")
             let deletes = channel.postgresChange(DeleteAction.self, schema: "public", table: "friendships")
-            try? await channel.subscribeWithError()
+            await ChatViewModel.subscribeWithRetry(channel, label: "friends-\(userId.uuidString)")
             await withTaskGroup(of: Void.self) { group in
                 group.addTask { for await _ in inserts { await self.loadAll(userId: userId) } }
                 group.addTask { for await _ in updates { await self.loadAll(userId: userId) } }

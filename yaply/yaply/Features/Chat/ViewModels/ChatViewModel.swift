@@ -582,11 +582,11 @@ final class ChatViewModel {
             let pinDeletes = pg.postgresChange(DeleteAction.self, schema: "public", table: "pinned_messages")
             let readInserts = pg.postgresChange(InsertAction.self, schema: "public", table: "message_reads")
             let profileUpdates = pg.postgresChange(UpdateAction.self, schema: "public", table: "profiles")
-            try? await pg.subscribeWithError()
+            await Self.subscribeWithRetry(pg, label: "chat-\(conversationId.uuidString)")
 
             let tc = supabase.channel("typing:\(conversationId.uuidString.lowercased())")
             let typingStream = tc.broadcast(event: "typing")
-            try? await tc.subscribeWithError()
+            await Self.subscribeWithRetry(tc, label: "typing-\(conversationId.uuidString)")
             typingChannel = tc  // Set after subscription so broadcasts don't fire on unsubscribed channel
 
             await withTaskGroup(of: Void.self) { group in
@@ -611,6 +611,32 @@ final class ChatViewModel {
                 group.addTask { for await _ in readInserts { await self.fetchReadStatus() } }
                 group.addTask { for await event in profileUpdates { await self.handleProfileUpdate(event.record) } }
                 group.addTask { for await payload in typingStream { await self.handleTyping(payload) } }
+            }
+        }
+    }
+
+    /// `subscribeWithError()` can throw (e.g. the socket is still connecting or timed out on a
+    /// slow/cold-launch network path — reproducible on a real device even when the simulator,
+    /// on a fast loopback-ish connection, subscribes fast enough to mask it). Silently swallowing
+    /// that failure (the old `try? await pg.subscribeWithError()`) left the channel permanently
+    /// unsubscribed for the rest of the ChatView's lifetime — `postgresChange` streams never
+    /// deliver anything, so no message ever arrives live until the user backs out and reopens the
+    /// conversation (which tears down and recreates the channel from scratch). Retry with backoff
+    /// instead of giving up after one attempt.
+    static func subscribeWithRetry(
+        _ channel: RealtimeChannelV2,
+        label: String,
+        maxAttempts: Int = 4
+    ) async {
+        for attempt in 1...maxAttempts {
+            do {
+                try await channel.subscribeWithError()
+                print("[Realtime] '\(label)' subscribed (attempt \(attempt))")
+                return
+            } catch {
+                print("[Realtime] '\(label)' subscribe failed (attempt \(attempt)/\(maxAttempts)): \(error)")
+                if attempt == maxAttempts { return }
+                try? await Task.sleep(for: .seconds(min(8, Double(attempt) * 2)))
             }
         }
     }
