@@ -169,9 +169,6 @@ struct ConversationListView: View {
                     LazyVStack(spacing: 0) {
                         ForEach(0..<8, id: \.self) { i in
                             ConversationRowSkeleton(delay: Double(i) * 0.06)
-                            Divider()
-                                .padding(.leading, 76)
-                                .foregroundStyle(Color.yaplyBorder)
                         }
                     }
                     .padding(.top, 8)
@@ -201,9 +198,6 @@ struct ConversationListView: View {
                             }
                             .buttonStyle(.plain)
                             .contextMenu { rowContextMenu(for: item) }
-                            Divider()
-                                .padding(.leading, 76)
-                                .foregroundStyle(Color.yaplyBorder)
                         }
                     }
                     .padding(.top, 8)

@@ -12,7 +12,9 @@ final class ChatViewModel {
     private(set) var isSending = false
     var error: String?
     var replyToMessage: DecryptedMessage?
-    private(set) var typingUsernames: [String] = []
+    // Holds user ids (not display names) so callers can reliably look up the
+    // typing member's profile — display names collide and aren't unique keys.
+    private(set) var typingUserIds: [String] = []
     private(set) var reactionsMap: [UUID: [ReactionGroup]] = [:]
     /// Pinned message ids, most-recently-pinned first.
     private(set) var pinnedMessageIds: [UUID] = []
@@ -646,7 +648,6 @@ final class ChatViewModel {
         let inner = payload["payload"]?.objectValue ?? payload
         guard
             let userId = inner["userId"]?.stringValue,
-            let username = inner["username"]?.stringValue,
             let isTyping = inner["isTyping"]?.boolValue,
             userId.lowercased() != currentUserId.uuidString.lowercased()
         else { return }
@@ -655,13 +656,13 @@ final class ChatViewModel {
         typingTimers[userId] = nil
 
         if isTyping {
-            if !typingUsernames.contains(username) { typingUsernames.append(username) }
+            if !typingUserIds.contains(userId) { typingUserIds.append(userId) }
             typingTimers[userId] = Task {
                 try? await Task.sleep(for: .seconds(3))
-                if !Task.isCancelled { self.typingUsernames.removeAll { $0 == username } }
+                if !Task.isCancelled { self.typingUserIds.removeAll { $0 == userId } }
             }
         } else {
-            typingUsernames.removeAll { $0 == username }
+            typingUserIds.removeAll { $0 == userId }
         }
     }
 
