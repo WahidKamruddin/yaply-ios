@@ -163,12 +163,22 @@ struct ChatView: View {
                                 }
                             }
 
-                            if !vm.typingUsernames.isEmpty {
-                                let typingMember = vm.conversationMembers.first(where: { $0.profile.username == vm.typingUsernames.first })
+                            if !vm.typingUserIds.isEmpty {
+                                // In a DM there's only one person who could ever be typing, so
+                                // use the same currentOtherMember lookup the header avatar
+                                // already relies on rather than matching the broadcast's userId
+                                // against the member list — one less thing that has to line up
+                                // exactly. Groups still need the id-based lookup since there's
+                                // more than one possible typer.
+                                let typingMember = vm.isGroupConversation
+                                    ? vm.conversationMembers.first(where: {
+                                        $0.userId.uuidString.lowercased() == vm.typingUserIds.first?.lowercased()
+                                    })
+                                    : currentOtherMember
                                 HStack(alignment: .bottom, spacing: 8) {
                                     AvatarView(
                                         url: typingMember?.profile.avatarUrl,
-                                        name: vm.typingUsernames.first ?? "?",
+                                        name: typingMember?.profile.name ?? "?",
                                         size: 28
                                     )
                                     VStack(alignment: .leading, spacing: 4) {
@@ -182,12 +192,17 @@ struct ChatView: View {
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 2)
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                    removal: .opacity
+                                ))
                                 .id("typing")
                             }
 
                             Color.clear.frame(height: 10).id("bottom")
                         }
                         .padding(.vertical, 8)
+                        .animation(.easeOut(duration: 0.2), value: vm.typingUserIds.isEmpty)
                     }
                     .onPreferenceChange(BubbleAnchorKey.self) { anchors in
                         bubbleAnchors = anchors
@@ -251,7 +266,7 @@ struct ChatView: View {
                     .onChange(of: vm.messages.count) { _, _ in
                         handleMessageCountChange(proxy: proxy)
                     }
-                    .onChange(of: vm.typingUsernames.isEmpty) { _, isEmpty in
+                    .onChange(of: vm.typingUserIds.isEmpty) { _, isEmpty in
                         if !isEmpty && isNearBottom {
                             withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                         }
@@ -699,27 +714,32 @@ struct ChatView: View {
     }
 }
 
+// Mirrors BubbleContentView's received-bubble styling exactly (yaplyCard fill,
+// yaplyBorderSoft stroke, same corner radii) so it reads as a real message
+// bubble rather than a one-off shape.
 private struct TypingBubbleView: View {
     @State private var animating = false
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             ForEach(0..<3, id: \.self) { i in
                 Circle()
                     .fill(Color.yaplySecondary)
-                    .frame(width: 8, height: 8)
-                    .offset(y: animating ? -5 : 0)
+                    .frame(width: 6, height: 6)
+                    .scaleEffect(animating ? 1 : 0.85)
+                    .opacity(animating ? 1 : 0.4)
+                    .offset(y: animating ? -3 : 0)
                     .animation(
-                        .easeInOut(duration: 0.5)
+                        .easeInOut(duration: 0.7)
                             .repeatForever(autoreverses: true)
-                            .delay(Double(i) * 0.18),
+                            .delay(Double(i) * 0.16),
                         value: animating
                     )
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(Color.yaplySurface)
+        .background(Color.yaplyCard)
         .clipShape(UnevenRoundedRectangle(cornerRadii: .init(
             topLeading: 18, bottomLeading: 4, bottomTrailing: 18, topTrailing: 18
         )))
