@@ -36,7 +36,7 @@ struct ConversationRowView: View {
                 }
 
                 HStack {
-                    Text(item.lastMessage.map { $0.isDeleted ? "Message deleted" : $0.content } ?? "No messages yet")
+                    Text(item.lastMessage.map { $0.previewText } ?? "No messages yet")
                         .font(.subheadline)
                         .foregroundStyle(item.unreadCount > 0 ? Color.yaplyPrimary : Color.yaplySecondary)
                         .fontWeight(item.unreadCount > 0 ? .medium : .regular)
