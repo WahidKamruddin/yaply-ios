@@ -39,6 +39,7 @@ struct ChatView: View {
     @State private var actionsAnchorRect: CGRect = .zero
     @State private var messageToDelete: UUID?
     @State private var bubbleAnchors: [UUID: CGRect] = [:]
+    @State private var hasScrolledInitially = false
     @Environment(AppRouter.self) private var router
 
     private let convRepository = ConversationRepository()
@@ -286,11 +287,23 @@ struct ChatView: View {
                             highlightedId = nil
                         }
                     }
+                    .opacity(hasScrolledInitially ? 1 : 0)
+                    .overlay {
+                        if !hasScrolledInitially {
+                            ProgressView()
+                        }
+                    }
                     .task {
                         vm.currentUsername = currentUsername
                         newMsgCount = 0
                         await vm.onAppear()
+                        // Wait a run-loop tick so the newly-populated LazyVStack has actually
+                        // laid out before we scroll, then reveal the list — otherwise scrollTo
+                        // resolves against stale layout and the top of the list flashes first.
                         proxy.scrollTo("bottom", anchor: .bottom)
+                        try? await Task.sleep(nanoseconds: 50_000_000)
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                        hasScrolledInitially = true
                     }
                 }
 
