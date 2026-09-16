@@ -60,6 +60,21 @@ struct DecryptedMessage: Identifiable, Hashable {
     var isDeleted: Bool { deletedAt != nil }
     var isText: Bool { type == "text" }
     var isMedia: Bool { ["image", "gif", "sticker"].contains(type) }
+
+    /// Short, human label for list/banner previews. Media types carry no text
+    /// content (`content == ""` by design), so this substitutes a type-based
+    /// label instead of showing a blank string.
+    var previewText: String {
+        if isDeleted { return "Message deleted" }
+        switch type {
+        case "sticker": return "Sticker"
+        case "gif": return "GIF"
+        case "image": return "📷 Photo"
+        case "voice": return "🎤 Voice message"
+        case "file": return "📎 File"
+        default: return content
+        }
+    }
 }
 
 struct SendMessageParams: Encodable {

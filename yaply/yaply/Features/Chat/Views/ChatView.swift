@@ -811,17 +811,7 @@ private struct PinnedBannerView: View {
     let onTap: () -> Void
     let onUnpin: () -> Void
 
-    private var preview: String {
-        if message.isDeleted { return "Message deleted" }
-        switch message.type {
-        case "sticker": return "Sticker"
-        case "gif": return "GIF"
-        case "image": return "📷 Photo"
-        case "voice": return "🎤 Voice message"
-        case "file": return "📎 File"
-        default: return message.content
-        }
-    }
+    private var preview: String { message.previewText }
 
     var body: some View {
         HStack(spacing: 8) {
