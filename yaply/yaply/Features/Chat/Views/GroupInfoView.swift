@@ -74,7 +74,7 @@ struct GroupInfoView: View {
                                 ZStack(alignment: .bottomTrailing) {
                                     AvatarView(url: member.profile.avatarUrl, name: member.profile.name, size: 36)
                                     Circle()
-                                        .fill(member.profile.isOnline ? Color.green : Color.yaplySecondary)
+                                        .fill(member.profile.effectiveOnline ? Color.green : Color.yaplySecondary)
                                         .frame(width: 9, height: 9)
                                         .overlay(Circle().stroke(Color.yaplySurface, lineWidth: 1.5))
                                 }

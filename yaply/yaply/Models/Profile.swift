@@ -42,6 +42,16 @@ struct Profile: Codable, Identifiable, Hashable {
     // Display name with username fallback
     var name: String { displayName ?? username }
 
+    /// `is_online` alone can get stuck `true` forever if the app is killed,
+    /// crashes, or loses network before it can write `is_online = false`
+    /// (see `PresenceService`'s foreground heartbeat). Treat a user as online
+    /// only if the flag is set AND we've heard from them within the heartbeat
+    /// window, so a stale row degrades to "offline" instead of staying wrong.
+    var effectiveOnline: Bool {
+        guard isOnline, let lastSeenAt else { return false }
+        return Date().timeIntervalSince(lastSeenAt) < PresenceService.staleAfter
+    }
+
     var initials: String {
         let n = name
         return String(n.prefix(1)).uppercased()

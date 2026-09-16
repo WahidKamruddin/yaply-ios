@@ -53,7 +53,7 @@ struct ChatView: View {
     private var currentOtherMember: MemberSummary? {
         vm.conversationMembers.first(where: { $0.userId != currentUserId })
     }
-    private var isOnline: Bool { currentOtherMember?.profile.isOnline ?? false }
+    private var isOnline: Bool { currentOtherMember?.profile.effectiveOnline ?? false }
     private var displayName: String {
         if vm.isGroupConversation { return vm.groupName ?? conversationName }
         return currentOtherMember?.profile.name ?? conversationName

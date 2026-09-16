@@ -6,7 +6,7 @@ struct ConversationRowView: View {
 
     private var displayName: String { item.displayName(currentUserId: currentUserId) }
     private var other: MemberSummary? { item.otherMember(currentUserId: currentUserId) }
-    private var isOnline: Bool { !item.isGroup && (other?.profile.isOnline ?? false) }
+    private var isOnline: Bool { !item.isGroup && (other?.profile.effectiveOnline ?? false) }
 
     var body: some View {
         HStack(spacing: 12) {

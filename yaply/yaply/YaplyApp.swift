@@ -26,9 +26,14 @@ struct YaplyApp: App {
             guard let userId = authService.currentUser?.id else { return }
             Task {
                 switch phase {
-                case .active:     await presence.goOnline(userId: userId)
-                case .background: await presence.goOffline(userId: userId)
-                default:          break
+                case .active:
+                    await presence.goOnline(userId: userId)
+                    presence.startHeartbeat(userId: userId)
+                case .background:
+                    presence.stopHeartbeat()
+                    await presence.goOffline(userId: userId)
+                default:
+                    break
                 }
             }
         }
@@ -37,6 +42,7 @@ struct YaplyApp: App {
             guard let userId else { return }
             Task {
                 await presence.goOnline(userId: userId)
+                presence.startHeartbeat(userId: userId)
                 await pushService.requestAndRegister()
                 await pushService.uploadTokenIfNeeded(userId: userId)
             }
