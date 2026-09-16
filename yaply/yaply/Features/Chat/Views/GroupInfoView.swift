@@ -99,7 +99,7 @@ struct GroupInfoView: View {
                                         .foregroundStyle(Color.yaplySecondary)
                                 }
                                 Spacer()
-                                if currentMemberIsAdmin && member.userId != currentUserId {
+                                if !isDirect && currentMemberIsAdmin && member.userId != currentUserId {
                                     HStack(spacing: 8) {
                                         if !member.isAdmin {
                                             Button {
