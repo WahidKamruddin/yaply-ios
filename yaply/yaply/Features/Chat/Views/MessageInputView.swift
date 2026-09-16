@@ -80,7 +80,6 @@ struct MessageInputView: View {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                             menuExpanded.toggle()
                         }
-                        if menuExpanded { isFocused = false }
                     } label: {
                         Image(systemName: menuExpanded ? "chevron.right" : "plus")
                             .font(.system(size: 20, weight: .medium))
