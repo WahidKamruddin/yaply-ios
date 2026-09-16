@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import PhotosUI
 import UniformTypeIdentifiers
 
@@ -203,6 +204,10 @@ struct ChatView: View {
                         }
                         .padding(.vertical, 8)
                         .animation(.easeOut(duration: 0.2), value: vm.typingUserIds.isEmpty)
+                    }
+                    .scrollDismissesKeyboard(.interactively)
+                    .onTapGesture {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                     }
                     .onPreferenceChange(BubbleAnchorKey.self) { anchors in
                         bubbleAnchors = anchors
