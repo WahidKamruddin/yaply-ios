@@ -50,6 +50,12 @@ final class AuthService {
     }
 
     func signOut() async throws {
+        // Before the session dies and clearAllKeys() wipes the device id this
+        // delete needs — afterwards the write would fail RLS and the row would
+        // be orphaned, still receiving this account's pushes.
+        if let userId = currentUser?.id {
+            await PushNotificationService.removeToken(userId: userId)
+        }
         try await supabase.auth.signOut()
         KeyStore.clearAllKeys()
         currentUser = nil
