@@ -21,10 +21,11 @@ final class FriendsViewModel {
     private let repository = FriendsRepository()
     private var realtimeTask: Task<Void, Never>?
     private var realtimeChannel: RealtimeChannelV2?
+    private var reconnectToken: UUID?
 
-    func loadAll(userId: UUID) async {
-        isLoading = true
-        defer { isLoading = false }
+    func loadAll(userId: UUID, showSpinner: Bool = true) async {
+        if showSpinner { isLoading = true }
+        defer { if showSpinner { isLoading = false } }
         do {
             async let f = repository.fetchFriends(userId: userId)
             async let reqs = repository.fetchFriendRequests(userId: userId)
@@ -123,19 +124,30 @@ final class FriendsViewModel {
     // Treats every friendships event purely as an invalidation trigger and
     // re-fetches, matching ChatViewModel.startRealtime's house style — never
     // parses the payload into domain state.
-    func startRealtime(userId: UUID) {
+    func startRealtime(userId: UUID, refetchOnSubscribe: Bool = false) {
         realtimeTask?.cancel()
         if let ch = realtimeChannel {
             Task { await supabase.removeChannel(ch) }
             realtimeChannel = nil
         }
+
+        if reconnectToken == nil {
+            reconnectToken = RealtimeConnectionMonitor.shared.register(
+                label: "friends-\(userId.uuidString)"
+            ) { [weak self] in
+                self?.startRealtime(userId: userId, refetchOnSubscribe: true)
+            }
+        }
+
         realtimeTask = Task {
             let channel = supabase.channel("friends-\(userId.uuidString)-\(UUID().uuidString)")
             realtimeChannel = channel
             let inserts = channel.postgresChange(InsertAction.self, schema: "public", table: "friendships")
             let updates = channel.postgresChange(UpdateAction.self, schema: "public", table: "friendships")
             let deletes = channel.postgresChange(DeleteAction.self, schema: "public", table: "friendships")
-            await ChatViewModel.subscribeWithRetry(channel, label: "friends-\(userId.uuidString)")
+            await RealtimeConnectionMonitor.subscribe(channel, label: "friends-\(userId.uuidString)")
+            // After subscribing, never before — see ChatViewModel.startRealtime.
+            if refetchOnSubscribe { await self.loadAll(userId: userId, showSpinner: false) }
             await withTaskGroup(of: Void.self) { group in
                 group.addTask { for await _ in inserts { await self.loadAll(userId: userId) } }
                 group.addTask { for await _ in updates { await self.loadAll(userId: userId) } }
@@ -145,6 +157,8 @@ final class FriendsViewModel {
     }
 
     func stopRealtime() {
+        RealtimeConnectionMonitor.shared.unregister(reconnectToken)
+        reconnectToken = nil
         realtimeTask?.cancel()
         realtimeTask = nil
         if let ch = realtimeChannel {
