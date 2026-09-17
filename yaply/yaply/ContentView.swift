@@ -10,6 +10,9 @@ struct ContentView: View {
     // Signs this install out the moment it's revoked from another device,
     // rather than leaving it usable until its access token expires.
     @State private var revocationWatcher = DeviceRevocationWatcher()
+    // Keeps every realtime subscription alive across network interruptions, and drives
+    // the "Reconnecting…" pill below.
+    @State private var realtimeMonitor = RealtimeConnectionMonitor.shared
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -25,6 +28,7 @@ struct ContentView: View {
                         }
                         .onAppear {
                             revocationWatcher.start(userId: userId)
+                            realtimeMonitor.start()
                             // A cold-launch tap lands before this view exists,
                             // so onChange alone would miss it.
                             router.consumePendingConversation()
@@ -32,7 +36,10 @@ struct ContentView: View {
                         .onChange(of: router.pendingConversationId) { _, _ in
                             router.consumePendingConversation()
                         }
-                        .onDisappear { revocationWatcher.stop() }
+                        .onDisappear {
+                            revocationWatcher.stop()
+                            realtimeMonitor.stop()
+                        }
                         .fullScreenCover(isPresented: Binding(
                             get: { suggestedUsername != nil },
                             set: { if !$0 { suggestedUsername = nil } }
@@ -47,21 +54,30 @@ struct ContentView: View {
                 }
             }
 
-            // In-app notification banner
-            if let n = notifications.current {
-                InAppBannerView(
-                    notification: n,
-                    onTap: {
-                        notifications.dismiss()
-                        router.push(.conversation(id: n.conversationId))
-                    },
-                    onDismiss: { notifications.dismiss() }
-                )
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .padding(.top, 8)
-                .zIndex(999)
-                .animation(.spring(duration: 0.35), value: notifications.current?.id)
+            // Top overlays — a VStack so an incoming-message banner and the reconnect
+            // pill stack instead of landing on top of each other.
+            VStack(spacing: 8) {
+                if let n = notifications.current {
+                    InAppBannerView(
+                        notification: n,
+                        onTap: {
+                            notifications.dismiss()
+                            router.push(.conversation(id: n.conversationId))
+                        },
+                        onDismiss: { notifications.dismiss() }
+                    )
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .animation(.spring(duration: 0.35), value: notifications.current?.id)
+                }
+
+                if realtimeMonitor.isReconnecting {
+                    ReconnectingPillView()
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
+            .padding(.top, 8)
+            .zIndex(999)
+            .animation(.spring(duration: 0.35), value: realtimeMonitor.isReconnecting)
         }
         .animation(.spring(duration: 0.35), value: notifications.current?.id)
         .preferredColorScheme(appearanceMode.colorScheme)

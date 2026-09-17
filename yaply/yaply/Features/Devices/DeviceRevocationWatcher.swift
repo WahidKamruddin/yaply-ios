@@ -51,7 +51,7 @@ final class DeviceRevocationWatcher {
                 table: "devices",
                 filter: .eq("id", value: rowId.uuidString)
             )
-            await ChatViewModel.subscribeWithRetry(ch, label: "device-revocation:\(rowId.uuidString)")
+            await RealtimeConnectionMonitor.subscribe(ch, label: "device-revocation:\(rowId.uuidString)")
             self.channel = ch
 
             self.foregroundObserver = NotificationCenter.default.addObserver(

@@ -16,6 +16,8 @@ final class ThreadViewModel {
     private let currentUserId: UUID
     private let repository = MessageRepository()
     private var realtimeTask: Task<Void, Never>?
+    private var realtimeChannel: RealtimeChannelV2?
+    private var reconnectToken: UUID?
     // Loaded lazily from the parent conversation on first send/decrypt.
     private var memberUserIds: [UUID]?
 
@@ -33,8 +35,7 @@ final class ThreadViewModel {
     }
 
     func onDisappear() {
-        realtimeTask?.cancel()
-        realtimeTask = nil
+        stopRealtime()
     }
 
     func load() async {
@@ -107,16 +108,46 @@ final class ThreadViewModel {
 
     // MARK: - Realtime
 
-    private func startRealtime() {
+    func startRealtime(refetchOnSubscribe: Bool = false) {
+        realtimeTask?.cancel()
+        if let ch = realtimeChannel {
+            Task { await supabase.removeChannel(ch) }
+            realtimeChannel = nil
+        }
+
+        if reconnectToken == nil {
+            reconnectToken = RealtimeConnectionMonitor.shared.register(
+                label: "thread-\(rootMessage.id.uuidString)"
+            ) { [weak self] in
+                self?.startRealtime(refetchOnSubscribe: true)
+            }
+        }
+
         realtimeTask = Task {
             let channel = supabase.channel("thread-\(rootMessage.id.uuidString)-\(UUID().uuidString)")
+            realtimeChannel = channel
             let inserts = channel.postgresChange(
                 InsertAction.self, schema: "public", table: "messages",
                 filter: .eq("thread_id", value: rootMessage.id.uuidString)
             )
-            await ChatViewModel.subscribeWithRetry(channel, label: "thread-\(rootMessage.id.uuidString)")
+            await RealtimeConnectionMonitor.subscribe(channel, label: "thread-\(rootMessage.id.uuidString)")
+            // After subscribing, never before — see ChatViewModel.startRealtime.
+            if refetchOnSubscribe { await load() }
             for await _ in inserts { await load() }
-            await supabase.removeChannel(channel)
+        }
+    }
+
+    // The channel has to be retained and removed here: cancelling the task alone leaves
+    // it open on the socket, because the removeChannel that used to trail the event loop
+    // is unreachable once the task is cancelled.
+    func stopRealtime() {
+        RealtimeConnectionMonitor.shared.unregister(reconnectToken)
+        reconnectToken = nil
+        realtimeTask?.cancel()
+        realtimeTask = nil
+        if let ch = realtimeChannel {
+            Task { await supabase.removeChannel(ch) }
+            realtimeChannel = nil
         }
     }
 

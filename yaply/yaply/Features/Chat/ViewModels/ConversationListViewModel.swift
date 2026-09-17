@@ -25,6 +25,7 @@ final class ConversationListViewModel {
     private let friendsRepository = FriendsRepository()
     private var realtimeTask: Task<Void, Never>?
     private var realtimeChannel: RealtimeChannelV2?
+    private var reconnectToken: UUID?
 
     func load(userId: UUID) async {
         isLoading = true
@@ -59,12 +60,21 @@ final class ConversationListViewModel {
     }
 
     // Realtime: watch for new messages and profile presence changes to refresh the list
-    private func startRealtime(userId: UUID) {
+    func startRealtime(userId: UUID, refetchOnSubscribe: Bool = false) {
         realtimeTask?.cancel()
         if let ch = realtimeChannel {
             Task { await supabase.removeChannel(ch) }
             realtimeChannel = nil
         }
+
+        if reconnectToken == nil {
+            reconnectToken = RealtimeConnectionMonitor.shared.register(
+                label: "conversation-list-\(userId.uuidString)"
+            ) { [weak self] in
+                self?.startRealtime(userId: userId, refetchOnSubscribe: true)
+            }
+        }
+
         realtimeTask = Task {
             let channel = supabase.channel("conversation-list-\(userId.uuidString)-\(UUID().uuidString)")
             realtimeChannel = channel
@@ -73,7 +83,15 @@ final class ConversationListViewModel {
             let friendshipInserts = channel.postgresChange(InsertAction.self, schema: "public", table: "friendships")
             let friendshipUpdates = channel.postgresChange(UpdateAction.self, schema: "public", table: "friendships")
             let friendshipDeletes = channel.postgresChange(DeleteAction.self, schema: "public", table: "friendships")
-            await ChatViewModel.subscribeWithRetry(channel, label: "conversation-list-\(userId.uuidString)")
+            await RealtimeConnectionMonitor.subscribe(channel, label: "conversation-list-\(userId.uuidString)")
+
+            // Catch up on everything missed while the socket was down — refresh() rather
+            // than load() so the list doesn't flash its loading spinner on a reconnect.
+            if refetchOnSubscribe {
+                await self.refresh(userId: userId)
+                await self.refreshFriendRequestCount(userId: userId)
+            }
+
             await withTaskGroup(of: Void.self) { group in
                 group.addTask {
                     for await action in messageInserts {
@@ -125,6 +143,8 @@ final class ConversationListViewModel {
     }
 
     func stopRealtime() {
+        RealtimeConnectionMonitor.shared.unregister(reconnectToken)
+        reconnectToken = nil
         realtimeTask?.cancel()
         realtimeTask = nil
         if let ch = realtimeChannel {

@@ -264,6 +264,80 @@ a notification-preferences UI, and badge reset on foreground.
 
 ---
 
+## Realtime Connection Recovery
+
+File: `Core/Realtime/RealtimeConnectionMonitor.swift` (+ `ReconnectingPillView.swift`).
+Started from `ContentView.onAppear`, stopped in `.onDisappear`.
+
+Realtime updates used to stop **permanently** after any network interruption and only
+come back on relaunch. `subscribeWithRetry` retried 4 times over ~12s and then returned
+silently, and nothing ever tried again — no `NWPathMonitor`, no foreground handling, and
+`startRealtime` called exactly once per view model. Because `ConversationListView` is the
+navigation root and stays mounted, one dead subscription killed the list for the life of
+the process.
+
+**Why it was invisible.** The WebSocket carries *only* change events; every fetch and
+send goes over plain HTTPS/PostgREST, and APNs is an OS-level connection. On a network
+that blocks WS upgrades but allows HTTPS the app loads, sends and receives push
+notifications perfectly while silently receiving nothing live. A dead socket means the UI
+is *frozen*, not empty — which is why recovery surfaces as a non-blocking pill and never
+a skeleton or a blocking overlay.
+
+**What supabase-swift 2.46.0 already does, and doesn't.** It reconnects the socket on app
+foreground and rejoins channels (`handleAppLifecycle`, default on), and retries **once**
+7s after a connection error. It does **not** reconnect after a server-initiated close,
+know anything about the network path, or have any idea the app missed events.
+
+**The four recovery signals** (all funnel into one debounced, single-flight sweep that
+runs every registered reconnect closure):
+1. `NWPathMonitor` — back to `.satisfied`, or a WiFi↔cellular interface change (the old
+   socket is bound to an interface that no longer carries traffic).
+2. `UIApplication.willEnterForegroundNotification`.
+3. `supabase.realtimeV2.onStatusChange` — a connected→lost→connected cycle. This is what
+   catches the server-initiated close the SDK never retries.
+4. A 30s periodic re-sweep while unhealthy.
+
+**Invariants — each guards a real failure mode:**
+- **Refetch on reconnect, not just resubscribe.** Reattaching a subscription only
+  delivers *future* events; everything that happened while the socket was down is gone.
+  Without the refetch the UI reconnects and still shows stale data, which is
+  indistinguishable from the bug being unfixed. This is the load-bearing half.
+- **Subscribe first, then refetch** — the catch-up runs *inside* the realtime task right
+  after `RealtimeConnectionMonitor.subscribe` returns. An event landing during the
+  refetch is then either delivered live or included in the fetch; refetching first would
+  lose exactly that window.
+- **Never give up.** `RealtimeConnectionMonitor.subscribe` retries forever with capped
+  backoff (2/4/8/16/30s). Unbounded is safe only because it runs inside a `realtimeTask`
+  that every `startRealtime` cancels on teardown — keep that relationship.
+- **Both `NWPathMonitor` and `onStatusChange` replay their current value on
+  subscribe.** Treating that first callback as a transition fires a sweep during launch
+  that tears down a subscription still being set up (`hasSeenInitialPath`,
+  `hasEverConnected` guard this).
+- **Resubscribing must tear down first.** Every `startRealtime` cancels its task,
+  `removeChannel`s, and rebuilds with a `UUID()`-salted topic. Re-invocation is therefore
+  safe and is exactly what the reconnect closure does.
+- **Register once, unregister on teardown.** The closure is `[weak self]`; the monitor
+  outlives every view model. Registration happens in `startRealtime` (guarded on a nil
+  token so a reconnect doesn't double-register) and unregisters in `stopRealtime`.
+- Handlers stay pure invalidation triggers followed by a refetch — unchanged house style.
+
+**Per-subscriber catch-up:** `ConversationListViewModel` → `refresh` +
+`refreshFriendRequestCount`; `ChatViewModel` → `mergeLatestMessages` + pins + reactions +
+read status + request state; `ThreadViewModel` → `load()`; `FriendsViewModel` →
+`loadAll(showSpinner: false)`; `PresenceService` → `goOnline` (a heartbeat write that
+failed while offline is dropped silently and leaves the row stale to peers).
+
+`ChatViewModel.mergeLatestMessages` **merges** the newest page by id rather than
+replacing `messages`, and leaves `nextCursor`/`hasMore` alone — that is what preserves
+pages scrolled in via `loadOlderMessages()` and the scroll position. Refetched rows
+replace their local counterparts so edits and `deleted_at` flips that happened offline
+land; in-flight optimistic sends keep their temp id and survive.
+
+**The pill** appears only after ~4s of sustained failure (an ordinary foreground
+re-establishes in well under a second) and clears the moment a subscribe succeeds.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology | Why |

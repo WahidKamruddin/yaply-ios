@@ -22,6 +22,7 @@ final class PresenceService {
     static let staleAfter: TimeInterval = 2 * heartbeatInterval
 
     private var heartbeatTask: Task<Void, Never>?
+    private var reconnectToken: UUID?
 
     func goOnline(userId: UUID) async {
         struct OnlineUpdate: Encodable {
@@ -60,6 +61,12 @@ final class PresenceService {
     /// one loop running.
     func startHeartbeat(userId: UUID) {
         stopHeartbeat()
+        // A heartbeat write that fails while offline is dropped silently, so the row can
+        // sit stale (or is_online = false) to peers until the next beat. Re-firing it on
+        // reconnect closes that window.
+        reconnectToken = RealtimeConnectionMonitor.shared.register(label: "presence") { [weak self] in
+            await self?.goOnline(userId: userId)
+        }
         heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(Self.heartbeatInterval * 1_000_000_000))
@@ -70,6 +77,8 @@ final class PresenceService {
     }
 
     func stopHeartbeat() {
+        RealtimeConnectionMonitor.shared.unregister(reconnectToken)
+        reconnectToken = nil
         heartbeatTask?.cancel()
         heartbeatTask = nil
     }

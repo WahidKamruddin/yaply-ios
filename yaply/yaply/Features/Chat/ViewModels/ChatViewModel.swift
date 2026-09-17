@@ -45,6 +45,7 @@ final class ChatViewModel {
     private var pgChannel: RealtimeChannelV2?
     private var typingChannel: RealtimeChannelV2?
     private var typingTimers: [String: Task<Void, Never>] = [:]
+    private var reconnectToken: UUID?
     private var isTyping = false
     private var typingDebounce: Task<Void, Never>?
 
@@ -77,18 +78,9 @@ final class ChatViewModel {
     func onDisappear() {
         sendTypingEvent(false)
         typingDebounce?.cancel()
-        realtimeTask?.cancel()
-        realtimeTask = nil
         typingTimers.values.forEach { $0.cancel() }
         typingTimers = [:]
-        if let ch = pgChannel {
-            Task { await supabase.removeChannel(ch) }
-            pgChannel = nil
-        }
-        if let ch = typingChannel {
-            Task { await supabase.removeChannel(ch) }
-            typingChannel = nil
-        }
+        stopRealtime()
     }
 
     // MARK: - Message loading + decryption
@@ -559,10 +551,18 @@ final class ChatViewModel {
 
     // MARK: - Real-time
 
-    private func startRealtime() {
+    func startRealtime(refetchOnSubscribe: Bool = false) {
         realtimeTask?.cancel()
         if let ch = pgChannel { Task { await supabase.removeChannel(ch) }; pgChannel = nil }
         if let ch = typingChannel { Task { await supabase.removeChannel(ch) }; typingChannel = nil }
+
+        if reconnectToken == nil {
+            reconnectToken = RealtimeConnectionMonitor.shared.register(
+                label: "chat-\(conversationId.uuidString)"
+            ) { [weak self] in
+                self?.startRealtime(refetchOnSubscribe: true)
+            }
+        }
 
         realtimeTask = Task {
             let pg = supabase.channel("chat-\(conversationId.uuidString)-\(UUID().uuidString)")
@@ -584,12 +584,17 @@ final class ChatViewModel {
             let pinDeletes = pg.postgresChange(DeleteAction.self, schema: "public", table: "pinned_messages")
             let readInserts = pg.postgresChange(InsertAction.self, schema: "public", table: "message_reads")
             let profileUpdates = pg.postgresChange(UpdateAction.self, schema: "public", table: "profiles")
-            await Self.subscribeWithRetry(pg, label: "chat-\(conversationId.uuidString)")
+            await RealtimeConnectionMonitor.subscribe(pg, label: "chat-\(conversationId.uuidString)")
 
             let tc = supabase.channel("typing:\(conversationId.uuidString.lowercased())")
             let typingStream = tc.broadcast(event: "typing")
-            await Self.subscribeWithRetry(tc, label: "typing-\(conversationId.uuidString)")
+            await RealtimeConnectionMonitor.subscribe(tc, label: "typing-\(conversationId.uuidString)")
             typingChannel = tc  // Set after subscription so broadcasts don't fire on unsubscribed channel
+
+            // Catch up *after* the subscription is live, never before: an event landing
+            // during the refetch is then either delivered live or included in the fetch.
+            // Refetching first would lose exactly that window.
+            if refetchOnSubscribe { await catchUpAfterReconnect() }
 
             await withTaskGroup(of: Void.self) { group in
                 group.addTask {
@@ -617,30 +622,56 @@ final class ChatViewModel {
         }
     }
 
-    /// `subscribeWithError()` can throw (e.g. the socket is still connecting or timed out on a
-    /// slow/cold-launch network path — reproducible on a real device even when the simulator,
-    /// on a fast loopback-ish connection, subscribes fast enough to mask it). Silently swallowing
-    /// that failure (the old `try? await pg.subscribeWithError()`) left the channel permanently
-    /// unsubscribed for the rest of the ChatView's lifetime — `postgresChange` streams never
-    /// deliver anything, so no message ever arrives live until the user backs out and reopens the
-    /// conversation (which tears down and recreates the channel from scratch). Retry with backoff
-    /// instead of giving up after one attempt.
-    static func subscribeWithRetry(
-        _ channel: RealtimeChannelV2,
-        label: String,
-        maxAttempts: Int = 4
-    ) async {
-        for attempt in 1...maxAttempts {
-            do {
-                try await channel.subscribeWithError()
-                print("[Realtime] '\(label)' subscribed (attempt \(attempt))")
-                return
-            } catch {
-                print("[Realtime] '\(label)' subscribe failed (attempt \(attempt)/\(maxAttempts)): \(error)")
-                if attempt == maxAttempts { return }
-                try? await Task.sleep(for: .seconds(min(8, Double(attempt) * 2)))
-            }
+    func stopRealtime() {
+        RealtimeConnectionMonitor.shared.unregister(reconnectToken)
+        reconnectToken = nil
+        realtimeTask?.cancel()
+        realtimeTask = nil
+        if let ch = pgChannel {
+            Task { await supabase.removeChannel(ch) }
+            pgChannel = nil
         }
+        if let ch = typingChannel {
+            Task { await supabase.removeChannel(ch) }
+            typingChannel = nil
+        }
+    }
+
+    // Everything that could have changed while the socket was down. Resubscribing alone
+    // only delivers *future* events, so without this the chat reattaches and keeps
+    // showing whatever it had before the interruption.
+    private func catchUpAfterReconnect() async {
+        await mergeLatestMessages()
+        await loadPins()
+        await loadReactionsForCurrentMessages()
+        await fetchReadStatus()
+        await loadMyRequestState()
+    }
+
+    // Merges the newest page into `messages` instead of replacing it, so pages the user
+    // scrolled in via loadOlderMessages() survive and the scroll position is kept.
+    // `nextCursor`/`hasMore` are deliberately left alone for the same reason.
+    //
+    // Refetched rows replace their local counterparts, which is what lands edits and the
+    // deleted_at flips that arrived while offline. Optimistic sends still in flight keep
+    // their temp id (not present server-side) and so survive untouched; if the insert has
+    // already landed, sendMessage's completion path resolves the brief duplicate.
+    private func mergeLatestMessages() async {
+        guard let (raw, _) = try? await repository.fetchMessages(conversationId: conversationId) else { return }
+        let fresh = await decryptAll(raw)
+
+        var byId: [UUID: DecryptedMessage] = [:]
+        for message in messages { byId[message.id] = message }
+        for message in fresh { byId[message.id] = message }
+        // Tie-break on id so messages sharing a timestamp keep a stable order across
+        // reconnects rather than shuffling.
+        messages = byId.values.sorted {
+            $0.createdAt == $1.createdAt
+                ? $0.id.uuidString < $1.id.uuidString
+                : $0.createdAt < $1.createdAt
+        }
+
+        await markAndFetchReceipts()
     }
 
     private func handleTyping(_ payload: JSONObject) async {
