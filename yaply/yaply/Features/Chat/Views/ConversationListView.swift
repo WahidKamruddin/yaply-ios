@@ -15,6 +15,11 @@ struct ConversationListView: View {
     private let convRepository = ConversationRepository()
     @Environment(AppRouter.self) private var router
     @Environment(NotificationManager.self) private var notifications
+    @Environment(PushNotificationService.self) private var pushService
+    // Persisted so the banner does not nag. It reappears only if the user
+    // re-enables notifications and later denies them again, since the flag is
+    // cleared whenever the status is anything other than denied.
+    @AppStorage("yaply.notificationsBannerDismissed.v1") private var bannerDismissed = false
 
     private var filtered: [ConversationListItem] {
         guard !searchText.isEmpty else { return vm.acceptedConversations }
@@ -78,6 +83,12 @@ struct ConversationListView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 12)
 
+                if pushService.authorizationStatus == .denied && !bannerDismissed {
+                    NotificationsDisabledBanner { bannerDismissed = true }
+                        .padding(.bottom, 12)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
                 switch bottomTab {
                 case .home:
                     HomeView(
@@ -106,6 +117,10 @@ struct ConversationListView: View {
         .onChange(of: router.activeConversationId) { _, newId in
             vm.activeConversationId = newId
         }
+        .onChange(of: pushService.authorizationStatus) { _, status in
+            if status != .denied { bannerDismissed = false }
+        }
+        .animation(.spring(duration: 0.3), value: pushService.authorizationStatus == .denied && !bannerDismissed)
         .onDisappear { vm.stopRealtime() }
         .sheet(isPresented: $showNewConversation) {
             NewConversationView(currentUserId: currentUserId) { convId in
