@@ -209,10 +209,15 @@ final class ConversationRepository {
     }
 
     func muteConversation(conversationId: UUID, userId: UUID, until: Date?) async throws {
-        struct MuteUpdate: Encodable { let muted_until: String? }
+        // Explicit AnyJSON.null rather than an Encodable struct holding an
+        // Optional: JSONEncoder omits nil Optionals, so unmuting sent an empty
+        // PATCH body and silently did nothing while muting worked fine.
+        let payload: [String: AnyJSON] = [
+            "muted_until": until.map { .string($0.iso8601) } ?? .null
+        ]
         try await supabase
             .from("conversation_members")
-            .update(MuteUpdate(muted_until: until?.iso8601))
+            .update(payload)
             .eq("conversation_id", value: conversationId.uuidString)
             .eq("user_id", value: userId.uuidString)
             .execute()

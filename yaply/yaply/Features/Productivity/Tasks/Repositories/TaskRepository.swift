@@ -104,10 +104,16 @@ final class TaskRepository {
     }
 
     func updateDueDate(taskId: UUID, dueAt: Date?) async throws {
-        struct Update: Encodable { let due_at: String?; let updated_at: String }
+        // Explicit AnyJSON.null rather than an Encodable struct holding an
+        // Optional: JSONEncoder omits nil Optionals, so clearing a due date
+        // would PATCH only updated_at and leave due_at untouched.
+        let payload: [String: AnyJSON] = [
+            "due_at": dueAt.map { .string($0.iso8601) } ?? .null,
+            "updated_at": .string(Date().iso8601),
+        ]
         try await supabase
             .from("tasks")
-            .update(Update(due_at: dueAt?.iso8601, updated_at: Date().iso8601))
+            .update(payload)
             .eq("id", value: taskId.uuidString)
             .execute()
     }
