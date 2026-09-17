@@ -11,7 +11,32 @@
 		CE19193F2FD286F6000511EC /* KeychainSwift in Frameworks */ = {isa = PBXBuildFile; productRef = CE19193E2FD286F6000511EC /* KeychainSwift */; };
 		CEAA83152FD2B136007C174E /* Config.xcconfig in Resources */ = {isa = PBXBuildFile; fileRef = CEAA83102FD2B136007C174E /* Config.xcconfig */; };
 		CEB2BCCA2FD2971700A6D20D /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = CEB2BCC92FD2971700A6D20D /* Supabase */; };
+		CEFB8B22305C8CE900723E1E /* YaplyNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = CEFB8B1B305C8CE900723E1E /* YaplyNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		CEFB8B20305C8CE900723E1E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CE1918A02FD28172000511EC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CEFB8B1A305C8CE900723E1E;
+			remoteInfo = YaplyNotificationService;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		CEFB8B23305C8CE900723E1E /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				CEFB8B22305C8CE900723E1E /* YaplyNotificationService.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		CE1918A82FD28172000511EC /* yaply.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = yaply.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -19,6 +44,7 @@
 		CEB2BC4B2FD2898100A6D20D /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
 		CEB2BCCF2FD299FC00A6D20D /* ConversationRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRepository.swift; sourceTree = "<group>"; };
 		CEB2BCD32FD2A8EA00A6D20D /* YaplyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YaplyApp.swift; sourceTree = "<group>"; };
+		CEFB8B1B305C8CE900723E1E /* YaplyNotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = YaplyNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -31,6 +57,24 @@
 			);
 			target = CE1918A72FD28172000511EC /* yaply */;
 		};
+		CEFB8B27305C8CE900723E1E /* Exceptions for "YaplyNotificationService" folder in "YaplyNotificationService" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = CEFB8B1A305C8CE900723E1E /* YaplyNotificationService */;
+		};
+		CEFB8B2A305C928800723E1E /* Exceptions for "yaply" folder in "YaplyNotificationService" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"Core/Extensions/Data+Base64URL.swift",
+				Core/Keychain/KeychainService.swift,
+				Features/Devices/DevicePairingCrypto.swift,
+				Features/Encryption/EncryptionService.swift,
+				Features/Encryption/KeyStore.swift,
+			);
+			target = CEFB8B1A305C8CE900723E1E /* YaplyNotificationService */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -38,8 +82,17 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				CEB2BC502FD293CC00A6D20D /* Exceptions for "yaply" folder in "yaply" target */,
+				CEFB8B2A305C928800723E1E /* Exceptions for "yaply" folder in "YaplyNotificationService" target */,
 			);
 			path = yaply;
+			sourceTree = "<group>";
+		};
+		CEFB8B1C305C8CE900723E1E /* YaplyNotificationService */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				CEFB8B27305C8CE900723E1E /* Exceptions for "YaplyNotificationService" folder in "YaplyNotificationService" target */,
+			);
+			path = YaplyNotificationService;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -55,6 +108,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CEFB8B18305C8CE900723E1E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -62,6 +122,7 @@
 			isa = PBXGroup;
 			children = (
 				CEB2BC4F2FD293A100A6D20D /* yaply */,
+				CEFB8B1C305C8CE900723E1E /* YaplyNotificationService */,
 				CEB2BCC52FD2962C00A6D20D /* Frameworks */,
 				CE1918A92FD28172000511EC /* Products */,
 				CEB2BCCF2FD299FC00A6D20D /* ConversationRepository.swift */,
@@ -75,6 +136,7 @@
 			isa = PBXGroup;
 			children = (
 				CE1918A82FD28172000511EC /* yaply.app */,
+				CEFB8B1B305C8CE900723E1E /* YaplyNotificationService.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -104,10 +166,12 @@
 				CE1918A42FD28172000511EC /* Sources */,
 				CE1918A52FD28172000511EC /* Frameworks */,
 				CE1918A62FD28172000511EC /* Resources */,
+				CEFB8B23305C8CE900723E1E /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				CEFB8B21305C8CE900723E1E /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				CEB2BC4F2FD293A100A6D20D /* yaply */,
@@ -122,6 +186,28 @@
 			productReference = CE1918A82FD28172000511EC /* yaply.app */;
 			productType = "com.apple.product-type.application";
 		};
+		CEFB8B1A305C8CE900723E1E /* YaplyNotificationService */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CEFB8B26305C8CE900723E1E /* Build configuration list for PBXNativeTarget "YaplyNotificationService" */;
+			buildPhases = (
+				CEFB8B17305C8CE900723E1E /* Sources */,
+				CEFB8B18305C8CE900723E1E /* Frameworks */,
+				CEFB8B19305C8CE900723E1E /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				CEFB8B1C305C8CE900723E1E /* YaplyNotificationService */,
+			);
+			name = YaplyNotificationService;
+			packageProductDependencies = (
+			);
+			productName = YaplyNotificationService;
+			productReference = CEFB8B1B305C8CE900723E1E /* YaplyNotificationService.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -133,6 +219,9 @@
 				LastUpgradeCheck = 2610;
 				TargetAttributes = {
 					CE1918A72FD28172000511EC = {
+						CreatedOnToolsVersion = 26.1;
+					};
+					CEFB8B1A305C8CE900723E1E = {
 						CreatedOnToolsVersion = 26.1;
 					};
 				};
@@ -157,6 +246,7 @@
 			projectRoot = "";
 			targets = (
 				CE1918A72FD28172000511EC /* yaply */,
+				CEFB8B1A305C8CE900723E1E /* YaplyNotificationService */,
 			);
 		};
 /* End PBXProject section */
@@ -170,6 +260,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CEFB8B19305C8CE900723E1E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -180,7 +277,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CEFB8B17305C8CE900723E1E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		CEFB8B21305C8CE900723E1E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CEFB8B1A305C8CE900723E1E /* YaplyNotificationService */;
+			targetProxy = CEFB8B20305C8CE900723E1E /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		CE1918B12FD28173000511EC /* Debug */ = {
@@ -312,6 +424,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = yaply/yaply.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 44C8ZXAZ8X;
@@ -349,6 +462,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = yaply/yaply.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 44C8ZXAZ8X;
@@ -380,6 +494,66 @@
 			};
 			name = Release;
 		};
+		CEFB8B24305C8CE900723E1E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_ENTITLEMENTS[sdk=*]" = YaplyNotificationService/YaplyNotificationService.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 44C8ZXAZ8X;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = YaplyNotificationService/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = YaplyNotificationService;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wahid.yaply.YaplyNotificationService;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		CEFB8B25305C8CE900723E1E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_ENTITLEMENTS[sdk=*]" = YaplyNotificationService/YaplyNotificationService.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 44C8ZXAZ8X;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = YaplyNotificationService/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = YaplyNotificationService;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wahid.yaply.YaplyNotificationService;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -397,6 +571,15 @@
 			buildConfigurations = (
 				CE1918B42FD28173000511EC /* Debug */,
 				CE1918B52FD28173000511EC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CEFB8B26305C8CE900723E1E /* Build configuration list for PBXNativeTarget "YaplyNotificationService" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CEFB8B24305C8CE900723E1E /* Debug */,
+				CEFB8B25305C8CE900723E1E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

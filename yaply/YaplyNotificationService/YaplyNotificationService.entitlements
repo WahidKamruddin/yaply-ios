@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Must match the app's first keychain-access-group exactly. This is what
+	  lets the extension read the identity private key the app wrote, so a
+	  locked-screen notification can show decrypted text. If these two arrays
+	  ever disagree, decryption silently fails and every push falls back to
+	  "New message".
+	-->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)wahid.yaply</string>
+	</array>
+</dict>
+</plist>
