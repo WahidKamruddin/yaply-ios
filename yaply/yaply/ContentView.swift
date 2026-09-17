@@ -23,7 +23,15 @@ struct ContentView: View {
                         .task(id: userId) {
                             suggestedUsername = await UsernameSetupViewModel.needsSetup(userId: userId)
                         }
-                        .onAppear { revocationWatcher.start(userId: userId) }
+                        .onAppear {
+                            revocationWatcher.start(userId: userId)
+                            // A cold-launch tap lands before this view exists,
+                            // so onChange alone would miss it.
+                            router.consumePendingConversation()
+                        }
+                        .onChange(of: router.pendingConversationId) { _, _ in
+                            router.consumePendingConversation()
+                        }
                         .onDisappear { revocationWatcher.stop() }
                         .fullScreenCover(isPresented: Binding(
                             get: { suggestedUsername != nil },
