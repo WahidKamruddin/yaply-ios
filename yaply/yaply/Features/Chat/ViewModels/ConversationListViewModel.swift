@@ -113,6 +113,10 @@ final class ConversationListViewModel {
         let conv = conversations.first { $0.id == convId }
         guard let conv else { return }
 
+        // Same suppression the server applies before sending a push, so the
+        // in-app banner and the lock screen never disagree.
+        guard !conv.isMuted, !conv.isMessageRequest, !conv.isDeclined else { return }
+
         let sender = conv.members.first { $0.userId == senderId }
         let senderName = sender?.profile.displayName ?? sender?.profile.username ?? "Someone"
         let convName = conv.displayName(currentUserId: currentUserId ?? UUID())
