@@ -196,6 +196,74 @@ are not RLS-filtered.
 
 ---
 
+## Push Notifications
+
+Files: `Features/Notifications/PushNotificationService.swift` (registration +
+token upload), `YaplyApp.swift` (`AppDelegate`, `UNUserNotificationCenterDelegate`),
+`YaplyNotificationService/NotificationService.swift` (the decrypting extension),
+`yaply/yaply.entitlements` + `YaplyNotificationService/YaplyNotificationService.entitlements`.
+The server half lives in the web repo — see **Push notifications** in
+`../CLAUDE.md` for the trigger, the edge function and the payload contract.
+
+**Previews are decrypted on-device.** The server cannot read a message, so the
+payload carries the ciphertext plus the one envelope this device can open, and
+a Notification Service Extension unwraps it — the same
+`EncryptionService.unwrapKey` → `decryptMessage` path `EnvelopeEncryption.decryptV2`
+uses, minus the network fetch. Branch on `enc_v` **first**, then `iv`, exactly
+as every other decrypt site does. Any failure delivers the server's placeholder
+body untouched; never surface ciphertext or a decode artifact.
+
+**The shared Keychain group is what makes this work.** Both entitlements list
+`$(AppIdentifierPrefix)wahid.yaply` as the **first and only**
+`keychain-access-groups` entry. That is already the group Keychain items land in
+implicitly, because `KeychainService` passes no `kSecAttrAccessGroup` and the
+default is the first entry of that array — so existing installs keep their keys
+and no migration is needed. **Reorder or rename it and every signed-in device
+loses its identity key, fails the orphan check, and re-registers as a brand-new
+device**, orphaning all history. Identity keys are stored
+`afterFirstUnlockThisDeviceOnly`, which is readable from an extension on the
+lock screen; do not tighten that to `whenUnlocked` or previews stop decrypting
+while locked.
+
+**Extension target membership.** The extension compiles four app files, all of
+which import only CryptoKit / Foundation / Security and so drag in no Supabase
+dependency: `EncryptionService.swift`, `KeyStore.swift`, `DevicePairingCrypto.swift`,
+`KeychainService.swift`. `EnvelopeEncryption.swift` is deliberately **excluded** —
+it takes a `MessageRepository`. Keep it that way; adding Supabase to the
+extension would blow its memory budget.
+
+**`environment` comes from the provisioning profile, not `#if DEBUG`.**
+`ApnsEnvironment.current` parses `aps-environment` out of
+`embedded.mobileprovision`. The two agree for Xcode-run and App Store builds but
+diverge for ad-hoc and enterprise ones, and a wrong value means every send gets
+`400 BadDeviceToken`, the server prunes the token, and notifications silently
+stop with no error the user can see.
+
+**Token upload races device registration.** `push_tokens` has a composite FK onto
+`devices`, which `EncryptionRegistrar` writes — but APNs can deliver the token
+first. `uploadToken` retries with backoff on Postgres `23503` and surfaces a real
+failure on `lastUploadError` rather than swallowing it into a `print`.
+
+**Delegate wiring.** `UNUserNotificationCenter.current().delegate` is assigned in
+`application(_:didFinishLaunchingWithOptions:)` — set it any later and iOS drops
+the notification that launched the app, so a cold-launch tap goes nowhere. In
+the foreground, a `kind == "message"` push returns only `[.sound, .badge]`
+because `ConversationListViewModel`'s realtime subscription already shows the
+in-app banner and the two would otherwise double up; everything else gets a
+full banner, which is also what finally makes locally scheduled `/remind`
+notifications present while the app is open. A tap writes
+`AppRouter.pendingConversationId`, which `ContentView` drains on appear and on
+change — buffered rather than pushed directly, because a cold-launch tap arrives
+before the navigation stack or the session exists.
+
+**Not built:** `needs_fetch` (set when a message exceeds the 4KB APNs cap, around
+2,100 characters) is parsed but not acted on — the extension leaves the
+placeholder body rather than fetching the message, since fetching would mean
+linking Supabase and sharing the auth session into the extension. Also missing:
+a notification-preferences UI, and badge reset on foreground.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology | Why |
@@ -246,7 +314,9 @@ The migrations in `../supabase/migrations/` match the live database. Use the col
 
 **profiles:** `id, username, display_name, avatar_url, bio, public_key, is_online, last_seen_at, created_at, updated_at`. `username` has a DB-level unique constraint — the actual source of truth. `Core/Supabase/UsernameAvailability.swift` (`UsernameAvailabilityChecker`, `UsernameAvailability` enum) provides a debounced (400ms) pre-save `select id from profiles where username = candidate` check — mirrors the web app's `useUsernameAvailability` hook — so the UI can block Save/Create Account before a write is attempted, not just react to a Postgres `23505` unique-violation after a failed one. Both call sites (`AuthViewModel.checkUsernameAvailability`, sign-up; `AccountSettingsViewModel.checkUsernameAvailability`, profile editing — passes `excluding: userId` so re-saving your own unchanged username doesn't read as taken) still catch `23505` on the actual write as a last-resort guard against a race between the check and the save.
 
-**devices:** `user_id, device_id (int — random per install, NOT always 1), identity_key (JSON — JWK format public key), key_fingerprint (text — JWK x.y), signed_prekey, device_name, push_subscription, last_active_at, created_at` — UNIQUE(user_id, device_id)
+**devices:** `user_id, device_id (int — random per install, NOT always 1), identity_key (JSON — JWK format public key), key_fingerprint (text — JWK x.y), signed_prekey, device_name, platform, session_id, last_active_at, created_at` — UNIQUE(user_id, device_id). The unused `push_subscription` column was dropped in `00038_push_tokens.sql`; push tokens live in `push_tokens` because `devices` is world-readable.
+
+**push_tokens:** `id, user_id, device_id (int), token, platform ('ios'|'android'), environment ('sandbox'|'production'), fail_count, last_success_at, created_at, updated_at` — UNIQUE(user_id, device_id), composite FK `(user_id, device_id) → devices ON DELETE CASCADE`. RLS is owner-only with no world-readable select. See **Push notifications** below.
 
 **tasks:** `id, conversation_id, created_by, assigned_to, title, description, status ('todo'|'in_progress'|'done'), priority ('low'|'medium'|'high'), due_at, completed_at, created_at, updated_at` — RLS: conversation members SELECT; creator/assignee UPDATE; creator DELETE.
 
