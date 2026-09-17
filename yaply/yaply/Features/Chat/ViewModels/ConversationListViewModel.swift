@@ -1,5 +1,6 @@
 import Supabase
 import Foundation
+import UserNotifications
 
 @Observable
 final class ConversationListViewModel {
@@ -16,6 +17,16 @@ final class ConversationListViewModel {
     // their own section, excluded (along with 'declined') from the main list.
     var messageRequests: [ConversationListItem] { conversations.filter(\.isMessageRequest) }
     var acceptedConversations: [ConversationListItem] { conversations.filter { !$0.isMessageRequest && !$0.isDeclined } }
+
+    // What the app icon badge should read. Mirrors push_targets_for_message's
+    // unread_count (migration 00044) — the same conversations the server would
+    // have counted, so a locally cleared badge and the next push agree instead of
+    // overwriting each other with different numbers.
+    var totalUnreadCount: Int {
+        conversations
+            .filter { !$0.isMessageRequest && !$0.isDeclined && !$0.isMuted }
+            .reduce(0) { $0 + $1.unreadCount }
+    }
 
     // Pending incoming friend-request count for the header badge.
     private(set) var pendingFriendRequestCount = 0
@@ -38,9 +49,17 @@ final class ConversationListViewModel {
     func refresh(userId: UUID) async {
         do {
             conversations = try await repository.fetchConversations(userId: userId)
+            await syncBadge()
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    // The server sets the badge on every push; nothing lowered it again, so it
+    // only ever climbed. Re-applying it from the freshly fetched list is what
+    // makes reading a conversation eventually clear it.
+    func syncBadge() async {
+        try? await UNUserNotificationCenter.current().setBadgeCount(totalUnreadCount)
     }
 
     func refreshFriendRequestCount(userId: UUID) async {
