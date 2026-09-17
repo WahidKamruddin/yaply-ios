@@ -1,5 +1,4 @@
 import Foundation
-import UserNotifications
 import Supabase
 import PostgREST
 
@@ -55,8 +54,11 @@ enum RemindHandler {
             remind_at: fireDate.iso8601
         )
 
+        // Delivery is the server's job: migration 00042's pg_cron job pushes at
+        // remind_at. Scheduling locally as well fired the reminder twice, and the
+        // local copy only ever reached the device that typed the command and was
+        // lost on reinstall.
         try await supabase.from("reminders").insert(insert).execute()
-        await scheduleLocalNotification(message: message, at: fireDate)
 
         let formatted = fireDate.formatted(.dateTime.month(.abbreviated).day().year().hour().minute())
         return "⏰ Reminder set for \(formatted): \"\(message)\""
@@ -118,25 +120,5 @@ enum RemindHandler {
         guard hour >= 0, hour <= 23, minute >= 0, minute <= 59 else { return nil }
 
         return (hour, minute)
-    }
-
-    // MARK: - Local notification
-
-    private static func scheduleLocalNotification(message: String, at date: Date) async {
-        let center = UNUserNotificationCenter.current()
-        let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
-        guard granted else { return }
-
-        let content = UNMutableNotificationContent()
-        content.title = "yaply Reminder"
-        content.body  = message
-        content.sound = .default
-
-        let components = Calendar.current.dateComponents(
-            [.year, .month, .day, .hour, .minute], from: date)
-        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
-        let request = UNNotificationRequest(
-            identifier: UUID().uuidString, content: content, trigger: trigger)
-        try? await center.add(request)
     }
 }
