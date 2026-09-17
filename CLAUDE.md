@@ -256,11 +256,43 @@ notifications present while the app is open. A tap writes
 change — buffered rather than pushed directly, because a cold-launch tap arrives
 before the navigation stack or the session exists.
 
-**Not built:** `needs_fetch` (set when a message exceeds the 4KB APNs cap, around
-2,100 characters) is parsed but not acted on — the extension leaves the
-placeholder body rather than fetching the message, since fetching would mean
-linking Supabase and sharing the auth session into the extension. Also missing:
-a notification-preferences UI, and badge reset on foreground.
+**Long messages deliberately show a placeholder — this is a decision, not a gap.**
+A message over roughly 2,100 characters does not fit the 4096-byte APNs payload,
+and the server holds only ciphertext: AES-GCM is all-or-nothing, so slicing the
+bytes yields something that fails the authentication tag. There is nothing to
+truncate. Two ways out were considered and rejected:
+
+- *The extension fetches the message* — what Signal, WhatsApp and Matrix do, and
+  the industry norm. It fails here for a Supabase-specific reason: supabase-swift
+  hands the extension a 1-hour JWT, and the refresh token rotates on use (so
+  refreshing inside the extension risks invalidating the app's session). A push
+  arriving more than an hour after the app was last opened — the normal case for a
+  notification — would find a dead token.
+- *The sender seals a second short blob* under the same message key, in extra
+  columns. Always works, but it is a wire-format change across both platforms that
+  no other messenger makes, for a case this rare.
+
+So oversized messages deliver `Sent a message` with the sender's name as the
+title, which is the part that matters. `mutable-content` is dropped for them so
+the extension is not woken for a notification it cannot improve.
+
+**Badge count** is the total unread across accepted, unmuted conversations.
+`ConversationListViewModel.totalUnreadCount` and the `unread_count` column of
+`push_targets_for_message` (migration `00044`) must stay in agreement: the client
+re-applies it after every `refresh`, the server sets it on every push, and if the
+two disagree the badge flips between numbers. Previously the server counted only
+the arriving conversation's unread and nothing ever lowered it.
+
+**Permission denial is surfaced** by `Features/Notifications/NotificationsDisabledBanner.swift`,
+rendered at the top of `ConversationListView` when `authorizationStatus == .denied`.
+iOS offers no way to re-prompt once denied, so without this the feature silently
+reads as broken. The status is re-read on `scenePhase == .active`, which is what
+makes the banner clear without a relaunch.
+
+**Still missing:** a notification-preferences UI — see yaply-ios#25. Per-kind
+toggles need a server-side prefs table, because suppression happens in the fanout
+query and a Notification Service Extension cannot suppress a notification, only
+modify one.
 
 ---
 
