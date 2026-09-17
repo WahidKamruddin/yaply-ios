@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>aps-environment</key>
+	<string>development</string>
+	<!--
+	  No app group here on purpose. Nothing shares a container or a UserDefaults
+	  suite with the extension — the only thing it needs from the app is the
+	  identity private key, and that travels through the keychain access group
+	  below, which is derived from the team's App ID prefix and needs no
+	  registration in the developer portal. Add one only when the extension
+	  needs the Supabase session (to implement the needs_fetch path).
+	-->
+	<!--
+	  Shared with the notification service extension so it can read the identity
+	  private key and decrypt a message preview on the lock screen.
+
+	  $(AppIdentifierPrefix)wahid.yaply is listed FIRST and alone on purpose: it
+	  is the group Keychain items already land in implicitly today, since
+	  KeychainService passes no kSecAttrAccessGroup and the default is the first
+	  entry of this array. Keeping it first means existing installs keep their
+	  keys — reorder it and every signed-in device loses its identity key,
+	  fails the orphan check, and re-registers as a brand-new device.
+	-->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)wahid.yaply</string>
+	</array>
+</dict>
+</plist>
