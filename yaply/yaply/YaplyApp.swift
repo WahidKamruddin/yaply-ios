@@ -19,6 +19,7 @@ struct YaplyApp: App {
                 .environment(authService)
                 .environment(router)
                 .environment(notifications)
+                .environment(pushService)
                 .task {
                     appDelegate.pushService = pushService
                     appDelegate.router = router
@@ -32,6 +33,11 @@ struct YaplyApp: App {
                 case .active:
                     await presence.goOnline(userId: userId)
                     presence.startHeartbeat(userId: userId)
+                    // Permission can only be changed in the Settings app, so the
+                    // status is re-read on return rather than cached from launch —
+                    // that is what makes the disabled banner disappear without a
+                    // relaunch.
+                    await pushService.refreshAuthorizationStatus()
                 case .background:
                     presence.stopHeartbeat()
                     await presence.goOffline(userId: userId)
@@ -117,8 +123,7 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         }
 
         // Everything else — friend requests, reminders, task assignments — has
-        // no in-app equivalent. This is also what makes locally scheduled
-        // /remind notifications present at all while the app is open.
+        // no in-app equivalent, so it gets a full banner.
         return [.banner, .sound, .badge]
     }
 
