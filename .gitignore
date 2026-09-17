@@ -24,3 +24,10 @@ xcuserdata/
 Config.xcconfig
 *.xcconfig
 !Config.xcconfig.example
+
+# APNs auth keys and other local credentials — never commit
+secrets/
+*.p8
+
+# xcodebuild output
+build/
