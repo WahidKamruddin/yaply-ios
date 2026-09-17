@@ -88,10 +88,13 @@ final class BudgetRepository {
     }
 
     func unlinkFromEvent(budgetId: UUID) async throws {
-        struct Update: Encodable { let event_id: String? }
+        // Explicit AnyJSON.null rather than an Encodable struct holding an
+        // Optional: JSONEncoder omits nil Optionals, so this would PATCH an
+        // empty body and silently never clear the column.
+        let payload: [String: AnyJSON] = ["event_id": .null]
         try await supabase
             .from("budgets")
-            .update(Update(event_id: nil))
+            .update(payload)
             .eq("id", value: budgetId.uuidString)
             .execute()
     }

@@ -16,11 +16,16 @@ struct DeviceRepository {
     }
 
     func rename(userId: UUID, deviceId: Int, name: String) async throws {
-        struct Rename: Encodable { let device_name: String? }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Explicit AnyJSON.null rather than an Encodable struct holding an
+        // Optional: JSONEncoder omits nil Optionals, so clearing a name would
+        // PATCH an empty body and silently keep the old one.
+        let payload: [String: AnyJSON] = [
+            "device_name": trimmed.isEmpty ? .null : .string(trimmed)
+        ]
         try await supabase
             .from("devices")
-            .update(Rename(device_name: trimmed.isEmpty ? nil : trimmed))
+            .update(payload)
             .eq("user_id", value: userId.uuidString)
             .eq("device_id", value: String(deviceId))
             .execute()

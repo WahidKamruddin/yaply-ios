@@ -180,15 +180,18 @@ final class EventRepository {
     }
 
     func confirmEvent(id: UUID, startsAt: Date, endsAt: Date? = nil) async throws {
-        struct Update: Encodable {
-            let status: String
-            let starts_at: String
-            let ends_at: String?
-            let updated_at: String
-        }
+        // Explicit AnyJSON.null rather than an Encodable struct holding an
+        // Optional: JSONEncoder omits nil Optionals, so confirming without an
+        // end time would leave a stale ends_at in place.
+        let payload: [String: AnyJSON] = [
+            "status": .string("confirmed"),
+            "starts_at": .string(startsAt.iso8601),
+            "ends_at": endsAt.map { .string($0.iso8601) } ?? .null,
+            "updated_at": .string(Date().iso8601),
+        ]
         try await supabase
             .from("events")
-            .update(Update(status: "confirmed", starts_at: startsAt.iso8601, ends_at: endsAt?.iso8601, updated_at: Date().iso8601))
+            .update(payload)
             .eq("id", value: id.uuidString)
             .execute()
     }

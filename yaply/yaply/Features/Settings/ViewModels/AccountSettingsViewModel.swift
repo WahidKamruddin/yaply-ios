@@ -124,15 +124,6 @@ final class AccountSettingsViewModel {
             avatarUrl = await updateAvatar(imageData: data, mimeType: avatarMime, userId: userId)
         }
 
-        struct ProfileUpdate: Encodable {
-            let display_name: String?
-            let username: String
-            let bio: String?
-            let birthdate: String?
-            let avatar_url: String?
-            let updated_at: String
-        }
-
         let birthdateFormatter: DateFormatter = {
             let f = DateFormatter()
             f.dateFormat = "yyyy-MM-dd"
@@ -140,17 +131,25 @@ final class AccountSettingsViewModel {
             return f
         }()
 
+        // Explicit AnyJSON.null rather than an Encodable struct holding
+        // Optionals: JSONEncoder omits nil Optionals, so clearing a display
+        // name, bio or birthdate would PATCH nothing and the old value would
+        // reappear on the next load.
+        let trimmedName = displayName.trimmingCharacters(in: .whitespaces)
+        let trimmedBio = bio.trimmingCharacters(in: .whitespaces)
+        let profilePayload: [String: AnyJSON] = [
+            "display_name": trimmedName.isEmpty ? .null : .string(trimmedName),
+            "username": .string(normalizedUsername),
+            "bio": trimmedBio.isEmpty ? .null : .string(trimmedBio),
+            "birthdate": birthdate.map { .string(birthdateFormatter.string(from: $0)) } ?? .null,
+            "avatar_url": avatarUrl.map { .string($0) } ?? .null,
+            "updated_at": .string(Date().iso8601),
+        ]
+
         do {
             try await supabase
                 .from("profiles")
-                .update(ProfileUpdate(
-                    display_name: displayName.trimmingCharacters(in: .whitespaces).isEmpty ? nil : displayName.trimmingCharacters(in: .whitespaces),
-                    username: normalizedUsername,
-                    bio: bio.trimmingCharacters(in: .whitespaces).isEmpty ? nil : bio.trimmingCharacters(in: .whitespaces),
-                    birthdate: birthdate.map { birthdateFormatter.string(from: $0) },
-                    avatar_url: avatarUrl,
-                    updated_at: Date().iso8601
-                ))
+                .update(profilePayload)
                 .eq("id", value: userId.uuidString)
                 .execute()
 
