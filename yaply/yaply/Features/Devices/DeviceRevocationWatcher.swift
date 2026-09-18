@@ -23,10 +23,16 @@ final class DeviceRevocationWatcher {
     private var foregroundObserver: NSObjectProtocol?
     private var rowId: UUID?
     private var userId: UUID?
+    private var reconnectToken: UUID?
 
     func start(userId: UUID) {
         stop()
         self.userId = userId
+        // A socket reconnect leaves this channel joined in name only (the SDK's rejoin
+        // is a no-op for subscribed channels), so it rebuilds with everything else.
+        reconnectToken = RealtimeConnectionMonitor.shared.register(label: "device-revocation") { [weak self] in
+            self?.start(userId: userId)
+        }
         task = Task { [weak self] in
             guard
                 let self,
@@ -44,14 +50,22 @@ final class DeviceRevocationWatcher {
             }
             self.rowId = rowId
 
-            let ch = supabase.channel("device-revocation:\(rowId.uuidString)")
+            // Fixed topic, so created through the monitor: a stop()/start() pair (e.g. the
+            // root view re-appearing) would otherwise collide with the instance still
+            // being removed and never finish subscribing.
+            let ch = await RealtimeConnectionMonitor.channel("device-revocation:\(rowId.uuidString)")
+            guard !Task.isCancelled else { RealtimeConnectionMonitor.remove(ch); return }
             let deletes = ch.postgresChange(
                 DeleteAction.self,
                 schema: "public",
                 table: "devices",
                 filter: .eq("id", value: rowId.uuidString)
             )
-            await RealtimeConnectionMonitor.subscribe(ch, label: "device-revocation:\(rowId.uuidString)")
+            let label = "device-revocation:\(rowId.uuidString)"
+            // Non-critical: it has no reconnect closure a sweep could run, and the
+            // foreground recheck() backs it up anyway.
+            await RealtimeConnectionMonitor.subscribe(ch, label: label, critical: false)
+            guard !Task.isCancelled else { RealtimeConnectionMonitor.remove(ch); return }
             self.channel = ch
 
             self.foregroundObserver = NotificationCenter.default.addObserver(
@@ -62,17 +76,31 @@ final class DeviceRevocationWatcher {
                 Task { @MainActor in await self?.recheck() }
             }
 
-            for await _ in deletes {
-                await self.revokeLocally()
-                break
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    await RealtimeConnectionMonitor.watch(ch, label: label) { [weak self] in
+                        self?.start(userId: userId)
+                    }
+                }
+                group.addTask {
+                    for await _ in deletes {
+                        await self.revokeLocally()
+                        break
+                    }
+                }
+                // Either finishing ends the watcher's current run.
+                await group.next()
+                group.cancelAll()
             }
         }
     }
 
     func stop() {
+        RealtimeConnectionMonitor.shared.unregister(reconnectToken)
+        reconnectToken = nil
         task?.cancel()
         task = nil
-        if let ch = channel { Task { await supabase.removeChannel(ch) } }
+        RealtimeConnectionMonitor.remove(channel)
         channel = nil
         if let observer = foregroundObserver {
             NotificationCenter.default.removeObserver(observer)

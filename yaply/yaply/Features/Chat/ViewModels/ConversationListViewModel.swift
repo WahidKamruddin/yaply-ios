@@ -81,28 +81,26 @@ final class ConversationListViewModel {
     // Realtime: watch for new messages and profile presence changes to refresh the list
     func startRealtime(userId: UUID, refetchOnSubscribe: Bool = false) {
         realtimeTask?.cancel()
-        if let ch = realtimeChannel {
-            Task { await supabase.removeChannel(ch) }
-            realtimeChannel = nil
-        }
+        RealtimeConnectionMonitor.remove(realtimeChannel)
+        realtimeChannel = nil
 
+        let label = "conversation-list-\(userId.uuidString)"
         if reconnectToken == nil {
-            reconnectToken = RealtimeConnectionMonitor.shared.register(
-                label: "conversation-list-\(userId.uuidString)"
-            ) { [weak self] in
+            reconnectToken = RealtimeConnectionMonitor.shared.register(label: label) { [weak self] in
                 self?.startRealtime(userId: userId, refetchOnSubscribe: true)
             }
         }
 
         realtimeTask = Task {
-            let channel = supabase.channel("conversation-list-\(userId.uuidString)-\(UUID().uuidString)")
+            let channel = await RealtimeConnectionMonitor.channel("conversation-list-\(userId.uuidString)-\(UUID().uuidString)")
+            guard !Task.isCancelled else { RealtimeConnectionMonitor.remove(channel); return }
             realtimeChannel = channel
             let messageInserts = channel.postgresChange(InsertAction.self, schema: "public", table: "messages")
             let profileUpdates = channel.postgresChange(UpdateAction.self, schema: "public", table: "profiles")
             let friendshipInserts = channel.postgresChange(InsertAction.self, schema: "public", table: "friendships")
             let friendshipUpdates = channel.postgresChange(UpdateAction.self, schema: "public", table: "friendships")
             let friendshipDeletes = channel.postgresChange(DeleteAction.self, schema: "public", table: "friendships")
-            await RealtimeConnectionMonitor.subscribe(channel, label: "conversation-list-\(userId.uuidString)")
+            await RealtimeConnectionMonitor.subscribe(channel, label: label)
 
             // Catch up on everything missed while the socket was down — refresh() rather
             // than load() so the list doesn't flash its loading spinner on a reconnect.
@@ -112,6 +110,11 @@ final class ConversationListViewModel {
             }
 
             await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    await RealtimeConnectionMonitor.watch(channel, label: label) { [weak self] in
+                        self?.startRealtime(userId: userId, refetchOnSubscribe: true)
+                    }
+                }
                 group.addTask {
                     for await action in messageInserts {
                         await self.handleIncomingMessage(action)
@@ -166,9 +169,7 @@ final class ConversationListViewModel {
         reconnectToken = nil
         realtimeTask?.cancel()
         realtimeTask = nil
-        if let ch = realtimeChannel {
-            Task { await supabase.removeChannel(ch) }
-            realtimeChannel = nil
-        }
+        RealtimeConnectionMonitor.remove(realtimeChannel)
+        realtimeChannel = nil
     }
 }

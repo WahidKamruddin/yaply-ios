@@ -553,19 +553,19 @@ final class ChatViewModel {
 
     func startRealtime(refetchOnSubscribe: Bool = false) {
         realtimeTask?.cancel()
-        if let ch = pgChannel { Task { await supabase.removeChannel(ch) }; pgChannel = nil }
-        if let ch = typingChannel { Task { await supabase.removeChannel(ch) }; typingChannel = nil }
+        RealtimeConnectionMonitor.remove(pgChannel); pgChannel = nil
+        RealtimeConnectionMonitor.remove(typingChannel); typingChannel = nil
 
+        let label = "chat-\(conversationId.uuidString)"
         if reconnectToken == nil {
-            reconnectToken = RealtimeConnectionMonitor.shared.register(
-                label: "chat-\(conversationId.uuidString)"
-            ) { [weak self] in
+            reconnectToken = RealtimeConnectionMonitor.shared.register(label: label) { [weak self] in
                 self?.startRealtime(refetchOnSubscribe: true)
             }
         }
 
         realtimeTask = Task {
-            let pg = supabase.channel("chat-\(conversationId.uuidString)-\(UUID().uuidString)")
+            let pg = await RealtimeConnectionMonitor.channel("chat-\(conversationId.uuidString)-\(UUID().uuidString)")
+            guard !Task.isCancelled else { RealtimeConnectionMonitor.remove(pg); return }
             pgChannel = pg
             let inserts = pg.postgresChange(
                 InsertAction.self, schema: "public", table: "messages",
@@ -584,19 +584,22 @@ final class ChatViewModel {
             let pinDeletes = pg.postgresChange(DeleteAction.self, schema: "public", table: "pinned_messages")
             let readInserts = pg.postgresChange(InsertAction.self, schema: "public", table: "message_reads")
             let profileUpdates = pg.postgresChange(UpdateAction.self, schema: "public", table: "profiles")
-            await RealtimeConnectionMonitor.subscribe(pg, label: "chat-\(conversationId.uuidString)")
-
-            let tc = supabase.channel("typing:\(conversationId.uuidString.lowercased())")
-            let typingStream = tc.broadcast(event: "typing")
-            await RealtimeConnectionMonitor.subscribe(tc, label: "typing-\(conversationId.uuidString)")
-            typingChannel = tc  // Set after subscription so broadcasts don't fire on unsubscribed channel
+            await RealtimeConnectionMonitor.subscribe(pg, label: label)
 
             // Catch up *after* the subscription is live, never before: an event landing
             // during the refetch is then either delivered live or included in the fetch.
             // Refetching first would lose exactly that window.
             if refetchOnSubscribe { await catchUpAfterReconnect() }
 
+            // Message events are consumed from here on regardless of the typing channel.
+            // Typing used to be subscribed *before* this group started, so a typing
+            // channel that never joined meant no message ever arrived live.
             await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    await RealtimeConnectionMonitor.watch(pg, label: label) { [weak self] in
+                        self?.startRealtime(refetchOnSubscribe: true)
+                    }
+                }
                 group.addTask {
                     for await event in inserts {
                         // Skip own inserts — sendMessage() already handles the optimistic → confirmed swap
@@ -617,9 +620,26 @@ final class ChatViewModel {
                 group.addTask { for await _ in pinDeletes { await self.loadPins() } }
                 group.addTask { for await _ in readInserts { await self.fetchReadStatus() } }
                 group.addTask { for await event in profileUpdates { await self.handleProfileUpdate(event.record) } }
-                group.addTask { for await payload in typingStream { await self.handleTyping(payload) } }
+                group.addTask { await self.runTypingChannel() }
             }
         }
+    }
+
+    // `typing:<conversation id>` is a fixed topic (web's useTypingIndicator listens on the
+    // same one), so it goes through the monitor's channel()/remove() to avoid colliding
+    // with its own previous instance. Non-critical: a failure here must never hold up
+    // message delivery or trigger a global reconnect sweep.
+    private func runTypingChannel() async {
+        let tc = await RealtimeConnectionMonitor.channel("typing:\(conversationId.uuidString.lowercased())")
+        guard !Task.isCancelled else { RealtimeConnectionMonitor.remove(tc); return }
+        let typingStream = tc.broadcast(event: "typing")
+        await RealtimeConnectionMonitor.subscribe(tc, label: "typing-\(conversationId.uuidString)", critical: false)
+        guard !Task.isCancelled else {
+            RealtimeConnectionMonitor.remove(tc)
+            return
+        }
+        typingChannel = tc  // Set after subscription so broadcasts don't fire on unsubscribed channel
+        for await payload in typingStream { await handleTyping(payload) }
     }
 
     func stopRealtime() {
@@ -627,14 +647,8 @@ final class ChatViewModel {
         reconnectToken = nil
         realtimeTask?.cancel()
         realtimeTask = nil
-        if let ch = pgChannel {
-            Task { await supabase.removeChannel(ch) }
-            pgChannel = nil
-        }
-        if let ch = typingChannel {
-            Task { await supabase.removeChannel(ch) }
-            typingChannel = nil
-        }
+        RealtimeConnectionMonitor.remove(pgChannel); pgChannel = nil
+        RealtimeConnectionMonitor.remove(typingChannel); typingChannel = nil
     }
 
     // Everything that could have changed while the socket was down. Resubscribing alone
@@ -723,7 +737,10 @@ final class ChatViewModel {
     }
 
     private func sendTypingEvent(_ typing: Bool) {
-        guard let channel = typingChannel else { return }
+        // Only over a joined channel: on an unjoined one the SDK silently re-sends it
+        // through the REST broadcast endpoint, which is what the "falling back to REST
+        // API" log was. A dropped typing blip is harmless.
+        guard let channel = typingChannel, channel.status == .subscribed else { return }
         Task {
             await channel.broadcast(
                 event: "typing",

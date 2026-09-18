@@ -188,36 +188,55 @@ extension can only modify a notification, not suppress it.
 File: `Core/Realtime/RealtimeConnectionMonitor.swift` (+ `ReconnectingPillView.swift`).
 Started from `ContentView.onAppear`, stopped in `.onDisappear`.
 
-Realtime used to die permanently after any network interruption: retries gave up
-after ~12s and nothing tried again. The WebSocket carries only change events (all
-fetches are HTTPS, pushes are OS-level), so a dead socket looks like a *frozen* UI,
-not an empty one — which is why recovery is a non-blocking pill, never a skeleton.
-supabase-swift reconnects on foreground and retries **once** after a connection
-error; it does not handle server-initiated closes or know about the network path.
+The WebSocket carries only change events (all fetches are HTTPS, pushes are
+OS-level), so a dead subscription looks like a *frozen* UI, not an empty one — which
+is why recovery is a non-blocking pill, never a skeleton. There is no HTTP fallback
+for receiving: the SDK's "broadcast() is automatically falling back to REST API" log
+only means a channel we sent on isn't joined.
 
-**Four recovery signals**, all funnelled into one debounced, single-flight sweep
-that runs every registered reconnect closure:
-1. `NWPathMonitor` — back to `.satisfied`, or a WiFi↔cellular interface change.
-2. `UIApplication.willEnterForegroundNotification`.
-3. `supabase.realtimeV2.onStatusChange` — a connected→lost→connected cycle.
-4. A 30s periodic re-sweep while unhealthy.
+**supabase-swift 2.46 behaviours this works around** (supabase-js handles them, which
+is why web never needed this):
+- After an auto-reconnect, `rejoinChannels()` is a **no-op** for channels still marked
+  `.subscribed` (all of them — a dead socket never sends `phx_close`). Every channel
+  must be rebuilt on reconnect.
+- `channel(topic)` **returns the existing instance** while the topic is in the map, and
+  `removeChannel` / a server `phx_close` evict **by topic** with no join_ref check.
+- A suspended app's socket dies silently and keeps reporting `.connected` for up to
+  ~1 min, so recovery on foreground/network change forces a fresh socket first.
+- A server-closed channel just goes quiet; its streams never finish.
+
+**Recovery signals**, funnelled into one debounced, single-flight sweep:
+1. `NWPathMonitor` back to `.satisfied` or an interface change — full sweep + socket reset.
+2. `willEnterForegroundNotification` — full sweep + socket reset (skipped if the socket
+   connected <5s ago).
+3. `onStatusChange` connected→lost→connected — full sweep (not our own reset).
+4. Every 30s while unhealthy — only the failing subscribers, or a full reset sweep if
+   the socket is down.
+5. `RealtimeConnectionMonitor.watch` per channel — a channel that went `.subscribed` →
+   `.unsubscribed` on its own rebuilds just its owner (1s, or 30s on a repeat drop).
 
 **Invariants:**
-- **Refetch on reconnect, not just resubscribe.** Reattaching only delivers future
-  events; without the refetch the UI reconnects and still shows stale data.
-- **Subscribe first, then refetch** — the catch-up runs inside the realtime task
-  right after `subscribe` returns, so an event landing during the refetch is either
-  delivered live or included in the fetch.
+- **Never await a secondary channel before consuming the primary's streams.** Chat
+  used to subscribe typing before starting its task group; a typing channel that never
+  joined meant no message arrived live (the build-5 regression). Typing runs as its own
+  child task and is `critical: false` (no pill, no global sweep).
+- **Create/remove channels only via `RealtimeConnectionMonitor.channel(_:)` /
+  `.remove(_:)`**, never `supabase.channel` / `Task { removeChannel }`. They serialise
+  removal before re-creation per topic; fixed topics (`typing:<conv>`,
+  `device-revocation:<row>`) otherwise collide with their own dying instance and never
+  finish subscribing. Remove a channel created after the task was cancelled.
+  (Pairing is exempt: a one-shot random topic that needs channel options.)
+- **Refetch on reconnect, not just resubscribe**, and **subscribe first, then refetch**
+  (inside the realtime task, right after `subscribe` returns).
 - **Never give up.** `subscribe` retries forever with capped backoff (2/4/8/16/30s).
   Safe only because it runs inside a `realtimeTask` that every `startRealtime`
   cancels on teardown — keep that relationship.
 - **`NWPathMonitor` and `onStatusChange` replay their current value on subscribe.**
-  `hasSeenInitialPath` / `hasEverConnected` stop that first callback from tearing
-  down a subscription still being set up.
-- **Resubscribing tears down first:** cancel task, `removeChannel`, rebuild with a
-  `UUID()`-salted topic. Re-invocation is safe and is what the reconnect closure does.
-- **Register once (guarded on a nil token), unregister in `stopRealtime`.** Closures
-  are `[weak self]`; the monitor outlives every view model.
+  `hasSeenInitialPath` / `hasEverConnected` stop that first callback from sweeping.
+- **Register once (guarded on a nil token), unregister in `stopRealtime`.** The
+  registered label must equal the `subscribe` label so targeted sweeps find it.
+- SDK logs print as `[RT]` (`RealtimeConsoleLogger` in `SupabaseClient.swift`); ours as
+  `[Realtime]`. Grab both from the device console before guessing.
 
 **Per-subscriber catch-up:** `ConversationListViewModel` → `refresh` +
 `refreshFriendRequestCount`; `ChatViewModel` → `mergeLatestMessages` + pins +
