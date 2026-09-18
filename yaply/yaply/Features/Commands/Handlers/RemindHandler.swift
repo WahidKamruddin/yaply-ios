@@ -26,9 +26,9 @@ enum RemindHandler {
         }
     }
 
-    // Returns the formatted confirmation string on success, throws RemindError on failure.
-    @discardableResult
-    static func execute(args: [String], conversationId: UUID, userId: UUID) async throws -> String {
+    // Throws RemindError on failure. Success is announced to the whole chat by
+    // the item-created pill, not local feedback (mirrors web remindHandler.ts).
+    static func execute(args: [String], conversationId: UUID, userId: UUID) async throws {
         guard args.count >= 3 else { throw RemindError.tooFewArgs }
 
         let dateStr = args[0]
@@ -40,28 +40,11 @@ enum RemindHandler {
             throw RemindError.badDateTime
         }
 
-        struct ReminderInsert: Encodable {
-            let conversation_id: String
-            let user_id: String
-            let message: String
-            let remind_at: String
-        }
-
-        let insert = ReminderInsert(
-            conversation_id: conversationId.uuidString,
-            user_id: userId.uuidString,
-            message: message,
-            remind_at: fireDate.iso8601
-        )
-
         // Delivery is the server's job: migration 00042's pg_cron job pushes at
         // remind_at. Scheduling locally as well fired the reminder twice, and the
         // local copy only ever reached the device that typed the command and was
         // lost on reinstall.
-        try await supabase.from("reminders").insert(insert).execute()
-
-        let formatted = fireDate.formatted(.dateTime.month(.abbreviated).day().year().hour().minute())
-        return "⏰ Reminder set for \(formatted): \"\(message)\""
+        try await ReminderRepository().createReminder(conversationId: conversationId, userId: userId, message: message, remindAt: fireDate)
     }
 
     // MARK: - Date + time parsing  mirrors parseDateTimeArgs in commandParser.ts

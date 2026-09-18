@@ -672,8 +672,7 @@ struct ChatView: View {
         switch cmd.name {
         case "remind":
             do {
-                let msg = try await RemindHandler.execute(args: cmd.args, conversationId: conversationId, userId: currentUserId)
-                showCommandFeedback(msg)
+                try await RemindHandler.execute(args: cmd.args, conversationId: conversationId, userId: currentUserId)
                 NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "reminders"])
             } catch {
                 showCommandFeedback(error.localizedDescription)
@@ -711,26 +710,28 @@ struct ChatView: View {
         }
     }
 
+    /// The repositories post the item-created pill themselves, so success
+    /// needs no local feedback — only a failure does.
     private func createItem(type: String, title: String) async {
-        switch type {
-        case "task":
-            try? await TaskRepository().createTask(conversationId: conversationId, createdBy: currentUserId, title: title)
-            showCommandFeedback("✓ Task created: \(title)")
-            NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "tasks"])
-        case "note":
-            try? await NoteRepository().createNote(conversationId: conversationId, userId: currentUserId, title: title)
-            showCommandFeedback("✓ Note created: \(title)")
-            NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "notes"])
-        case "album":
-            try? await AlbumRepository().createAlbum(conversationId: conversationId, createdBy: currentUserId, name: title)
-            showCommandFeedback("✓ Album created: \(title)")
-            NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "albums"])
-        case "plan":
-            try? await EventRepository().createEvent(conversationId: conversationId, createdBy: currentUserId, name: title, status: "planning")
-            showCommandFeedback("✓ Plan created: \(title)")
-            NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "events"])
-        default:
-            break
+        do {
+            switch type {
+            case "task":
+                _ = try await TaskRepository().createTask(conversationId: conversationId, createdBy: currentUserId, title: title)
+                NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "tasks"])
+            case "note":
+                _ = try await NoteRepository().createNote(conversationId: conversationId, userId: currentUserId, title: title)
+                NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "notes"])
+            case "album":
+                _ = try await AlbumRepository().createAlbum(conversationId: conversationId, createdBy: currentUserId, name: title)
+                NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "albums"])
+            case "plan":
+                _ = try await EventRepository().createEvent(conversationId: conversationId, createdBy: currentUserId, name: title, status: "planning")
+                NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "events"])
+            default:
+                break
+            }
+        } catch {
+            showCommandFeedback("Couldn't create that \(type) — try again.")
         }
     }
 

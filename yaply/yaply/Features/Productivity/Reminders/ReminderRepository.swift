@@ -59,7 +59,8 @@ final class ReminderRepository {
             let message: String
             let remind_at: String
         }
-        try await supabase
+        struct Created: Decodable { let id: UUID }
+        let created: Created = try await supabase
             .from("reminders")
             .insert(Insert(
                 conversation_id: conversationId.uuidString,
@@ -67,7 +68,11 @@ final class ReminderRepository {
                 message: message,
                 remind_at: remindAt.iso8601
             ))
+            .select("id")
+            .single()
             .execute()
+            .value
+        await MessageRepository.postItemCreated(conversationId: conversationId, senderId: userId, item: SystemItem(kind: .reminder, id: created.id, title: message))
     }
 
     func dismissReminder(id: UUID) async throws {

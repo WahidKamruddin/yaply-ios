@@ -65,13 +65,15 @@ final class TaskRepository {
             let status: String
             let priority: String
         }
-        return try await supabase
+        let task: YaplyTask = try await supabase
             .from("tasks")
             .insert(Insert(conversation_id: conversationId.uuidString, created_by: createdBy.uuidString, title: title, status: "todo", priority: priority))
             .select()
             .single()
             .execute()
             .value
+        await MessageRepository.postItemCreated(conversationId: conversationId, senderId: createdBy, item: SystemItem(kind: .task, id: task.id, title: title))
+        return task
     }
 
     func updateStatus(taskId: UUID, status: String) async throws {

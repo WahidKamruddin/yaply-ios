@@ -103,6 +103,35 @@ final class MessageRepository {
             .value
     }
 
+    /// Posts the "{sender} created a {kind} · {title}" pill. Best effort: a
+    /// failed pill must never fail the create itself. System messages are
+    /// never encrypted (`iv: nil`, `enc_v: nil`, base64 UTF-8 content) and
+    /// self-destruct after a week via `deleted_at`, exactly like web's
+    /// `postItemCreated`.
+    static func postItemCreated(conversationId: UUID, senderId: UUID, item: SystemItem) async {
+        struct Row: Encodable {
+            let conversation_id: String
+            let sender_id: String
+            let content: String
+            let iv: String?
+            let type: String
+            let deleted_at: String
+        }
+        let row = Row(
+            conversation_id: conversationId.uuidString,
+            sender_id: senderId.uuidString,
+            content: Data(item.encoded.utf8).base64EncodedString(),
+            iv: nil,
+            type: "system",
+            deleted_at: Date().addingTimeInterval(7 * 24 * 60 * 60).iso8601
+        )
+        do {
+            try await supabase.from("messages").insert(row).execute()
+        } catch {
+            print("[yaply] failed to post item-created message: \(error)")
+        }
+    }
+
     // Unfiltered by last_active_at — used ONLY to decide the phase-1 fallback
     // (does this member have any registered device at all, ever). Must NOT be used
     // to pick which devices receive envelopes; a member with a merely stale device

@@ -56,13 +56,15 @@ final class NoteRepository {
             let title: String
             let content: String
         }
-        return try await supabase
+        let note: YaplyNote = try await supabase
             .from("notes")
             .insert(Insert(conversation_id: conversationId.uuidString, user_id: userId.uuidString, title: title, content: content))
             .select()
             .single()
             .execute()
             .value
+        await MessageRepository.postItemCreated(conversationId: conversationId, senderId: userId, item: SystemItem(kind: .note, id: note.id, title: title))
+        return note
     }
 
     func updateNote(id: UUID, content: String) async throws {

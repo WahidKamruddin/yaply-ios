@@ -135,7 +135,7 @@ final class EventRepository {
             let starts_at: String?
             let ends_at: String?
         }
-        return try await supabase
+        let event: YaplyEvent = try await supabase
             .from("events")
             .insert(Insert(
                 conversation_id: conversationId.uuidString,
@@ -151,6 +151,12 @@ final class EventRepository {
             .single()
             .execute()
             .value
+        await MessageRepository.postItemCreated(
+            conversationId: conversationId,
+            senderId: createdBy,
+            item: SystemItem(kind: status == "planning" ? .plan : .event, id: event.id, title: name)
+        )
+        return event
     }
 
     func deleteEvent(id: UUID) async throws {
