@@ -36,6 +36,7 @@ struct ChatView: View {
     @State private var showHelp = false
     @State private var isDropTargeted = false
     @State private var actionsMessage: DecryptedMessage?
+    @State private var actionsPosition: BubblePosition = .single
     @State private var actionsAnchorRect: CGRect = .zero
     @State private var messageToDelete: UUID?
     @State private var bubbleAnchors: [UUID: CGRect] = [:]
@@ -131,7 +132,14 @@ struct ChatView: View {
                             let grouped = groupByDate(displayMessages)
                             ForEach(grouped, id: \.date) { group in
                                 DateSeparatorView(date: group.date)
+                                let positions = BubblePosition.positions(for: group.messages)
+                                let newSpeakerIds: Set<UUID> = vm.isGroupConversation
+                                    ? Set(zip(group.messages, group.messages.dropFirst())
+                                        .filter { $0.senderId != $1.senderId }
+                                        .map { $1.id })
+                                    : []
                                 ForEach(group.messages) { msg in
+                                    let position = positions[msg.id] ?? .single
                                     MessageBubbleView(
                                         message: msg,
                                         isOwn: msg.senderId == currentUserId,
@@ -149,8 +157,12 @@ struct ChatView: View {
                                         onOpenDetail: { openPanel($0) },
                                         onLongPress: { m in
                                             actionsAnchorRect = bubbleAnchors[m.id] ?? .zero
+                                            actionsPosition = position
                                             actionsMessage = m
                                         },
+                                        groupPosition: position,
+                                        showsSenderName: vm.isGroupConversation,
+                                        startsNewSpeaker: newSpeakerIds.contains(msg.id),
                                         swipeOffset: swipeOffset
                                     )
                                     .opacity(actionsMessage?.id == msg.id ? 0 : 1)
@@ -420,6 +432,7 @@ struct ChatView: View {
                 MessageActionsOverlay(
                     message: m,
                     isOwn: m.senderId == currentUserId,
+                    position: actionsPosition,
                     myReaction: vm.myReaction(for: m.id),
                     isPinned: vm.isPinned(m.id),
                     canDelete: m.senderId == currentUserId,
@@ -557,6 +570,7 @@ struct ChatView: View {
                 rootMessage: root,
                 conversationId: conversationId,
                 currentUserId: currentUserId,
+                isGroup: vm.isGroupConversation,
                 isPresented: Binding(
                     get: { threadRoot != nil },
                     set: { if !$0 { threadRoot = nil } }

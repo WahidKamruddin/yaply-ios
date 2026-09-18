@@ -439,6 +439,8 @@ rail floats above and the action card below; the group only shifts vertically
   (back). Translate is deliberately absent. Delete routes to `ChatView`'s
   `yaplyConfirm`; Copy puts `message.content` (or media URL) on `UIPasteboard`.
 
+**Grouped runs:** `BubblePosition.positions(for:)` (per date group) feeds `MessageBubbleView.groupPosition`, `BubbleShape` and `BubbleContentView.position`; `ChatView` stores `actionsPosition` so the long-press copy keeps the grouped corners. Rule in `../CLAUDE.md`.
+
 `MessageBubbleView` no longer uses `.contextMenu` at all. Other gestures: swipe
 right on a bubble = reply; swipe left on own bubble reveals the timestamp
 (`ChatView` owns a single `swipeOffset` so only one shows).
