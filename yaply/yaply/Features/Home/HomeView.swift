@@ -11,9 +11,17 @@ struct HomeView: View {
     let conversations: [ConversationListItem]
     let isLoadingConversations: Bool
     let onOpenConversation: (UUID) -> Void
+    /// Opens a conversation and then one of its items on top of it (Back
+    /// returns to the chat). Reminders open their panel tab; events and
+    /// notes open the item itself — mirrors web's Dashboard.
+    let onOpenItem: (UUID, AppRoute) -> Void
 
     @State private var vm = HomeViewModel()
     @State private var creating: DashboardCreateType?
+
+    private func members(_ conversationId: UUID) -> [MemberSummary] {
+        conversations.first(where: { $0.id == conversationId })?.members ?? []
+    }
 
     private func conversationLabel(_ conversationId: UUID) -> String {
         conversations.first(where: { $0.id == conversationId })?.displayName(currentUserId: currentUserId) ?? "Unknown chat"
@@ -119,7 +127,9 @@ struct HomeView: View {
                 VStack(spacing: 2) {
                     ForEach(vm.reminders) { reminder in
                         Button {
-                            if let cid = reminder.conversationId { onOpenConversation(cid) }
+                            if let cid = reminder.conversationId {
+                                onOpenItem(cid, .conversationPanel(conversationId: cid, members: members(cid), tab: "reminders"))
+                            }
                         } label: {
                             HStack(alignment: .top, spacing: 10) {
                                 Image(systemName: "clock")
@@ -162,7 +172,7 @@ struct HomeView: View {
                 VStack(spacing: 2) {
                     ForEach(vm.upcomingEvents) { event in
                         Button {
-                            onOpenConversation(event.conversationId)
+                            onOpenItem(event.conversationId, .eventDetail(event))
                         } label: {
                             HStack(alignment: .top, spacing: 10) {
                                 Image(systemName: event.isPlanning ? "map" : "calendar")
@@ -205,7 +215,9 @@ struct HomeView: View {
                 VStack(spacing: 2) {
                     ForEach(vm.notes) { note in
                         Button {
-                            if let cid = note.conversationId { onOpenConversation(cid) }
+                            if let cid = note.conversationId {
+                                onOpenItem(cid, .conversationPanel(conversationId: cid, members: members(cid), tab: "notes", focusItemId: note.id))
+                            }
                         } label: {
                             HStack(alignment: .top, spacing: 10) {
                                 Image(systemName: "doc.text")

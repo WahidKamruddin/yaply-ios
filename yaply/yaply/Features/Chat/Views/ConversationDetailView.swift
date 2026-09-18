@@ -5,6 +5,8 @@ struct ConversationDetailView: View {
     let currentUserId: UUID
     var members: [MemberSummary] = []
     var initialTab: String = "reminders"
+    /// A note/budget to open on arrival (from an item-created pill or Home).
+    var focusItemId: UUID? = nil
 
     private var isCurrentUserAdmin: Bool {
         members.first { $0.userId == currentUserId }?.isAdmin ?? false
@@ -105,7 +107,7 @@ struct ConversationDetailView: View {
         case "tasks":
             TaskListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
         case "notes":
-            NoteListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
+            NoteListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin, focusItemId: focusItemId)
         case "reminders":
             ReminderListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
         case "events":
@@ -113,7 +115,7 @@ struct ConversationDetailView: View {
         case "albums":
             AlbumListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
         case "budgets":
-            BudgetListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
+            BudgetListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin, focusItemId: focusItemId)
         default:
             ReminderListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
         }

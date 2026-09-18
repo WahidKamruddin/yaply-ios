@@ -155,6 +155,7 @@ struct ChatView: View {
                                         onReplyInThread: { threadRoot = $0 },
                                         onQuotationClick: { id in scrollToId = id },
                                         onOpenDetail: { openPanel($0) },
+                                        onOpenItem: { item in Task { await openItem(item) } },
                                         onLongPress: { m in
                                             actionsAnchorRect = bubbleAnchors[m.id] ?? .zero
                                             actionsPosition = position
@@ -635,6 +636,43 @@ struct ChatView: View {
             members: vm.conversationMembers,
             tab: tab
         ))
+    }
+
+    /// Opens the item an item-created pill points at. Tasks and reminders
+    /// have no detail view, so they open the panel tab; plans/events and
+    /// albums push their own page; notes/budgets open in the panel. A deleted
+    /// item falls back to its tab.
+    private func openItem(_ item: SystemItem) async {
+        if item.kind.opensInPanelOnly {
+            openPanel(item.kind.tab)
+            return
+        }
+        switch item.kind {
+        case .plan, .event:
+            let events = (try? await EventRepository().fetchEvents(conversationId: conversationId)) ?? []
+            if let event = events.first(where: { $0.id == item.id }) {
+                router.push(.eventDetail(event))
+                return
+            }
+        case .album:
+            let albums = (try? await AlbumRepository().fetchAlbums(conversationId: conversationId)) ?? []
+            if let album = albums.first(where: { $0.id == item.id }) {
+                let isAdmin = vm.conversationMembers.first { $0.userId == currentUserId }?.isAdmin ?? false
+                router.push(.albumDetail(album: album, isCurrentUserAdmin: isAdmin))
+                return
+            }
+        case .note, .budget:
+            router.push(.conversationPanel(
+                conversationId: conversationId,
+                members: vm.conversationMembers,
+                tab: item.kind.tab,
+                focusItemId: item.id
+            ))
+            return
+        case .task, .reminder:
+            break
+        }
+        openPanel(item.kind.tab)
     }
 
     private func handleMessageCountChange(proxy: ScrollViewProxy) {
