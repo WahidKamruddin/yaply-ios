@@ -61,13 +61,15 @@ final class BudgetRepository {
             let currency: String
             let event_id: String?
         }
-        return try await supabase
+        let budget: YaplyBudget = try await supabase
             .from("budgets")
             .insert(Insert(conversation_id: conversationId.uuidString, created_by: createdBy.uuidString, name: name, total_amount: totalAmount, currency: currency, event_id: eventId?.uuidString))
             .select()
             .single()
             .execute()
             .value
+        await MessageRepository.postItemCreated(conversationId: conversationId, senderId: createdBy, item: SystemItem(kind: .budget, id: budget.id, title: name))
+        return budget
     }
 
     func deleteBudget(id: UUID) async throws {

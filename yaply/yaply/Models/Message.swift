@@ -65,6 +65,9 @@ struct DecryptedMessage: Identifiable, Hashable {
     /// content (`content == ""` by design), so this substitutes a type-based
     /// label instead of showing a blank string.
     var previewText: String {
+        // System messages carry a future deletedAt (their 7-day expiry), so
+        // they're checked before the deleted state.
+        if type == "system" { return SystemItem.previewText(content) }
         if isDeleted { return "Message deleted" }
         switch type {
         case "sticker": return "Sticker"

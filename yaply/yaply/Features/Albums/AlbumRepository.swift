@@ -66,13 +66,15 @@ final class AlbumRepository {
             let name: String
             let event_id: String?
         }
-        return try await supabase
+        let album: YaplyAlbum = try await supabase
             .from("albums")
             .insert(Insert(conversation_id: conversationId.uuidString, created_by: createdBy.uuidString, name: name, event_id: eventId?.uuidString))
             .select()
             .single()
             .execute()
             .value
+        await MessageRepository.postItemCreated(conversationId: conversationId, senderId: createdBy, item: SystemItem(kind: .album, id: album.id, title: name))
+        return album
     }
 
     func deleteAlbum(id: UUID) async throws {
