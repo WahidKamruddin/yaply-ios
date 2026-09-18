@@ -4,8 +4,13 @@ struct BudgetListView: View {
     let conversationId: UUID
     let currentUserId: UUID
     var isCurrentUserAdmin: Bool = false
+    /// Set when opened from an item-created pill: that budget is scrolled
+    /// into view and briefly outlined (iOS has no budget detail page).
+    var focusItemId: UUID? = nil
 
     @State private var budgets: [YaplyBudget] = []
+    @State private var didApplyFocus = false
+    @State private var highlightedId: UUID?
     @State private var events: [YaplyEvent] = []
     @State private var isLoading = false
     @State private var showCreate = false
@@ -32,10 +37,15 @@ struct BudgetListView: View {
                     EmptyStateView(icon: "dollarsign.circle", title: "No budgets yet")
                     Spacer()
                 } else {
+                    ScrollViewReader { proxy in
                     List {
                         ForEach(budgets) { budget in
                             BudgetRowView(budget: budget, events: events)
                                 .yaplyCardStyle()
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .stroke(Color.yaplyAccent, lineWidth: highlightedId == budget.id ? 2 : 0)
+                                )
                                 .yaplyCardRowContainer()
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                     let canDelete = budget.createdBy == currentUserId || isCurrentUserAdmin
@@ -90,6 +100,18 @@ struct BudgetListView: View {
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
+                    .onAppear {
+                        guard let focusItemId, !didApplyFocus,
+                              budgets.contains(where: { $0.id == focusItemId }) else { return }
+                        didApplyFocus = true
+                        proxy.scrollTo(focusItemId, anchor: .center)
+                        withAnimation { highlightedId = focusItemId }
+                        Task {
+                            try? await Task.sleep(for: .seconds(1.5))
+                            withAnimation { highlightedId = nil }
+                        }
+                    }
+                    }
                 }
             }
         }

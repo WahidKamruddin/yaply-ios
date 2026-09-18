@@ -123,12 +123,13 @@ struct ContentView: View {
             TaskListView(conversationId: convId, currentUserId: userId)
         case .noteList:
             Text("Notes — coming soon").foregroundStyle(Color.yaplySecondary)
-        case .conversationPanel(let convId, let members, let tab):
+        case .conversationPanel(let convId, let members, let tab, let focusItemId):
             ConversationDetailView(
                 conversationId: convId,
                 currentUserId: userId,
                 members: members,
-                initialTab: tab
+                initialTab: tab,
+                focusItemId: focusItemId
             )
         case .eventDetail(let event):
             EventDetailView(event: event, currentUserId: userId)

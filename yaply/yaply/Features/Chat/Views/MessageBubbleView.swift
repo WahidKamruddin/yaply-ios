@@ -2,7 +2,9 @@ import SwiftUI
 import Kingfisher
 import UIKit // NSString.boundingRect for reply-quote width estimation
 
-// Tab names that match ConversationDetailView tab IDs
+// Pre-JSON system messages (plain text, expire within a week of the
+// item-created pill format shipping) still get a tab link. Tab names match
+// ConversationDetailView tab IDs.
 private let systemMessageTabMap: [(pattern: String, tab: String)] = [
     ("Plan created",  "events"),
     ("Event created", "events"),
@@ -75,7 +77,10 @@ struct MessageBubbleView: View {
     var onOpenThread: ((DecryptedMessage) -> Void)?
     var onReplyInThread: ((DecryptedMessage) -> Void)?
     var onQuotationClick: ((UUID) -> Void)?
+    /// Legacy plain-text system messages only know their panel tab.
     var onOpenDetail: ((String) -> Void)?
+    /// Item-created pills open the item itself (or its tab for tasks/reminders).
+    var onOpenItem: ((SystemItem) -> Void)?
     /// Long-press on the bubble — opens the Messenger-style actions overlay.
     var onLongPress: ((DecryptedMessage) -> Void)?
     /// Position in a run of consecutive messages from the same sender.
@@ -127,6 +132,8 @@ struct MessageBubbleView: View {
     private var systemMessageView: some View {
         if let expiry = message.deletedAt, expiry <= Date() {
             EmptyView()
+        } else if let item = SystemItem.parse(message.content) {
+            itemCreatedPill(item)
         } else {
             let tab = systemMessageTab(for: message.content)
             HStack(spacing: 4) {
@@ -153,6 +160,52 @@ struct MessageBubbleView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 4)
         }
+    }
+
+    /// "{sender} created a {kind} · {title}  Open ›" — mirrors web's pill in
+    /// MessageBubble.tsx.
+    private func itemCreatedPill(_ item: SystemItem) -> some View {
+        let who = isOwn ? "You" : (message.senderProfile?.name ?? "Someone")
+        let titleText = Text(item.title)
+            .fontWeight(.medium)
+            .foregroundStyle(Color.yaplyPrimary)
+        return HStack(spacing: 8) {
+            Image(systemName: item.kind.symbol)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.yaplyAccent)
+                .frame(width: 20, height: 20)
+                .background(Color.yaplyAccent.opacity(0.14))
+                .clipShape(Circle())
+            Text("\(who) created a \(item.kind.noun)\(item.title.isEmpty ? "" : " · ")\(titleText)")
+                .foregroundStyle(Color.yaplySecondary)
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if let onOpenItem {
+                Button {
+                    onOpenItem(item)
+                } label: {
+                    HStack(spacing: 1) {
+                        Text("Open")
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.yaplyAccent)
+                }
+                .buttonStyle(.plain)
+                .layoutPriority(1)
+            }
+        }
+        .padding(.leading, 5)
+        .padding(.trailing, 12)
+        .padding(.vertical, 4)
+        .background(Color.yaplyTint)
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(Color.yaplyBorderSoft, lineWidth: 0.5))
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
     }
 
     private var mainRow: some View {

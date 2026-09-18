@@ -95,7 +95,11 @@ struct ConversationListView: View {
                         currentUserId: currentUserId,
                         conversations: vm.conversations,
                         isLoadingConversations: vm.isLoading,
-                        onOpenConversation: { router.push(.conversation(id: $0)) }
+                        onOpenConversation: { router.push(.conversation(id: $0)) },
+                        onOpenItem: { cid, route in
+                            router.push(.conversation(id: cid))
+                            router.push(route)
+                        }
                     )
                 case .chats:
                     messagesContent

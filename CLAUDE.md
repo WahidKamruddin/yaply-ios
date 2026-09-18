@@ -355,11 +355,18 @@ GIPHY_API_KEY = your-giphy-key
 - **Conversation delete = membership delete only.** `ConversationRepository.deleteConversation`
   removes the user's own `conversation_members` row; the DB trigger
   `trg_delete_empty_conversation` removes the conversation when nobody is left.
-- **System messages:** `type == "system"`, `iv = nil`, `deleted_at = now + 7d` (set
-  at insert). `MessageBubbleView` returns `EmptyView` when `deletedAt <= Date()` —
-  never "Message deleted". Active ones render as a centered pill with an
-  "Open {tab} →" button; `systemMessageTabMap` maps content prefixes
-  ("Task created" → tasks, "Plan created" → events, …) to `ConversationDetailView` tabs.
+- **System messages (item-created pills):** JSON contract in `../CLAUDE.md`;
+  `Features/Chat/Support/SystemItemMessage.swift` parses/encodes it. Every
+  `create*` in the Task/Note/Album/Budget/Event/Reminder repositories calls
+  `MessageRepository.postItemCreated` itself, so every create path (slash command,
+  panel, Home) posts the pill — don't add a second post at a call site.
+  `MessageBubbleView` returns `EmptyView` when `deletedAt <= Date()` (never
+  "Message deleted"); `previewText` checks `system` before `isDeleted`. Open →
+  `ChatView.openItem`: task/reminder → panel tab; plan/event → `.eventDetail`;
+  album → `.albumDetail`; note/budget → `.conversationPanel(focusItemId:)`
+  (note expands, budget row is outlined — no budget detail page); a deleted item
+  falls back to its tab. Home rows push the chat, then the item. Non-JSON content is
+  legacy text: `systemMessageTabMap` prefix → tab link only.
 - **Sidebar refetch after slash commands:** after a `/task` `/note` `/remind`
   `/album` `/budget` `/event` `/plan` insert, `ChatView` posts
   `Notification.Name.yaplyItemCreated` (defined in `Core/Extensions/String+Utils.swift`)
@@ -368,7 +375,7 @@ GIPHY_API_KEY = your-giphy-key
   built from local-time `Date`s via `ISO8601DateFormatter` with `timeZone = UTC` and
   `.withFractionalSeconds`, 8am–10pm local in 30-min rows — must match web or the
   heatmap breaks. Every formatter that parses a slot key back must also set UTC.
-- **`RemindHandler`** always schedules a local `UNNotificationRequest` for the creator.
+- **`RemindHandler`** inserts via `ReminderRepository.createReminder` (delivery is server-side pg_cron); success shows as the pill, not local feedback.
 - **`ConversationDetailView`** is the iOS equivalent of the web's right-hand
   `ConversationPanel` (tabs: Tasks | Notes | Reminders | Events | Albums | Budgets),
   opened from the `list.bullet.rectangle.portrait` toolbar button or a system-message

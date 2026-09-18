@@ -12,8 +12,8 @@ enum AppRoute: Hashable {
 
     /// The shared productivity panel for a conversation (Tasks / Notes /
     /// Reminders / Events / Albums / Budgets), pushed as a page rather than
-    /// presented as a sheet.
-    case conversationPanel(conversationId: UUID, members: [MemberSummary], tab: String)
+    /// presented as a sheet. `focusItemId` opens one note/budget on arrival.
+    case conversationPanel(conversationId: UUID, members: [MemberSummary], tab: String, focusItemId: UUID? = nil)
 
     /// A single event / plan, pushed as its own page.
     case eventDetail(YaplyEvent)

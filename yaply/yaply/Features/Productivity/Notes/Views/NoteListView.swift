@@ -4,8 +4,12 @@ struct NoteListView: View {
     let conversationId: UUID
     let currentUserId: UUID
     var isCurrentUserAdmin: Bool = false
+    /// Set when opened from an item-created pill or Home: that note opens
+    /// expanded and scrolled into view (once).
+    var focusItemId: UUID? = nil
 
     @State private var notes: [YaplyNote] = []
+    @State private var didApplyFocus = false
     @State private var isLoading = false
     @State private var showAdd = false
     @State private var newTitle = ""
@@ -28,6 +32,7 @@ struct NoteListView: View {
                     EmptyStateView(icon: "note.text", title: "No notes yet")
                     Spacer()
                 } else {
+                    ScrollViewReader { proxy in
                     List {
                         ForEach(notes) { note in
                             NoteRowView(
@@ -70,6 +75,14 @@ struct NoteListView: View {
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
+                    .onAppear {
+                        guard let focusItemId, !didApplyFocus,
+                              notes.contains(where: { $0.id == focusItemId }) else { return }
+                        didApplyFocus = true
+                        expandedId = focusItemId
+                        proxy.scrollTo(focusItemId, anchor: .center)
+                    }
+                    }
                 }
             }
         }
