@@ -20,6 +20,21 @@ let supabase: SupabaseClient = {
     }
 
     return SupabaseClient(supabaseURL: url, supabaseKey: key, options: .init(
-        auth: .init(emitLocalSessionAsInitialSession: true)
+        auth: .init(emitLocalSessionAsInitialSession: true),
+        global: .init(logger: RealtimeConsoleLogger())
     ))
 }()
+
+// Prints supabase-swift's own Realtime log lines, prefixed `[RT]`, to the device console
+// alongside our `[Realtime]` lines. Without it the SDK's state transitions (subscribe
+// timeouts, server closes, heartbeat timeouts) are invisible, which is what made the
+// "live messages only arrive after a refresh" bug so hard to pin down. Other SDK
+// systems (Auth, PostgREST) are left out as noise.
+nonisolated struct RealtimeConsoleLogger: SupabaseLogger {
+    func log(message: SupabaseLogMessage) {
+        guard message.system == "Realtime" else { return }
+        // Fires every 25s while healthy; a heartbeat *timeout* is still printed.
+        if message.message == "heartbeat received" { return }
+        print("[RT] \(message.level) \(message.message)")
+    }
+}

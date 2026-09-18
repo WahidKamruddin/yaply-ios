@@ -110,30 +110,35 @@ final class ThreadViewModel {
 
     func startRealtime(refetchOnSubscribe: Bool = false) {
         realtimeTask?.cancel()
-        if let ch = realtimeChannel {
-            Task { await supabase.removeChannel(ch) }
-            realtimeChannel = nil
-        }
+        RealtimeConnectionMonitor.remove(realtimeChannel)
+        realtimeChannel = nil
 
+        let label = "thread-\(rootMessage.id.uuidString)"
         if reconnectToken == nil {
-            reconnectToken = RealtimeConnectionMonitor.shared.register(
-                label: "thread-\(rootMessage.id.uuidString)"
-            ) { [weak self] in
+            reconnectToken = RealtimeConnectionMonitor.shared.register(label: label) { [weak self] in
                 self?.startRealtime(refetchOnSubscribe: true)
             }
         }
 
         realtimeTask = Task {
-            let channel = supabase.channel("thread-\(rootMessage.id.uuidString)-\(UUID().uuidString)")
+            let channel = await RealtimeConnectionMonitor.channel("thread-\(rootMessage.id.uuidString)-\(UUID().uuidString)")
+            guard !Task.isCancelled else { RealtimeConnectionMonitor.remove(channel); return }
             realtimeChannel = channel
             let inserts = channel.postgresChange(
                 InsertAction.self, schema: "public", table: "messages",
                 filter: .eq("thread_id", value: rootMessage.id.uuidString)
             )
-            await RealtimeConnectionMonitor.subscribe(channel, label: "thread-\(rootMessage.id.uuidString)")
+            await RealtimeConnectionMonitor.subscribe(channel, label: label)
             // After subscribing, never before — see ChatViewModel.startRealtime.
             if refetchOnSubscribe { await load() }
-            for await _ in inserts { await load() }
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    await RealtimeConnectionMonitor.watch(channel, label: label) { [weak self] in
+                        self?.startRealtime(refetchOnSubscribe: true)
+                    }
+                }
+                group.addTask { for await _ in inserts { await self.load() } }
+            }
         }
     }
 
@@ -145,10 +150,8 @@ final class ThreadViewModel {
         reconnectToken = nil
         realtimeTask?.cancel()
         realtimeTask = nil
-        if let ch = realtimeChannel {
-            Task { await supabase.removeChannel(ch) }
-            realtimeChannel = nil
-        }
+        RealtimeConnectionMonitor.remove(realtimeChannel)
+        realtimeChannel = nil
     }
 
     // MARK: - Encryption (v2 — mirrors ChatViewModel's decryptDbMessage)
