@@ -7,6 +7,8 @@ import SwiftUI
 struct MessageActionsOverlay: View {
     let message: DecryptedMessage
     let isOwn: Bool
+    /// Grouped-run position of the tapped bubble, so the copy's corners match.
+    var position: BubblePosition = .single
     let myReaction: String?
     let isPinned: Bool
     let canDelete: Bool
@@ -47,7 +49,7 @@ struct MessageActionsOverlay: View {
                     .onTapGesture { dismiss() }
 
                 // The bubble — held in place (only moves with the shared dy).
-                BubbleContentView(message: message, isOwn: isOwn)
+                BubbleContentView(message: message, isOwn: isOwn, position: position)
                     .frame(width: anchorRect.width, alignment: isOwn ? .trailing : .leading)
                     .position(x: anchorRect.midX, y: anchorRect.midY + dy)
                     .allowsHitTesting(false)

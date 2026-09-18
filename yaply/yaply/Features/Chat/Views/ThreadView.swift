@@ -3,16 +3,19 @@ import SwiftUI
 struct ThreadView: View {
     @State private var vm: ThreadViewModel
     let currentUserId: UUID
+    /// Sender names show on bubbles only in group chats.
+    let isGroup: Bool
     @Binding var isPresented: Bool
     @State private var messageText = ""
 
-    init(rootMessage: DecryptedMessage, conversationId: UUID, currentUserId: UUID, isPresented: Binding<Bool>) {
+    init(rootMessage: DecryptedMessage, conversationId: UUID, currentUserId: UUID, isGroup: Bool, isPresented: Binding<Bool>) {
         _vm = State(initialValue: ThreadViewModel(
             rootMessage: rootMessage,
             conversationId: conversationId,
             currentUserId: currentUserId
         ))
         self.currentUserId = currentUserId
+        self.isGroup = isGroup
         _isPresented = isPresented
     }
 
@@ -40,7 +43,8 @@ struct ThreadView: View {
                                         currentUserId: currentUserId,
                                         reactions: [],
                                         onReply: { _ in },
-                                        onDelete: { _ in }
+                                        onDelete: { _ in },
+                                        showsSenderName: isGroup
                                     )
                                 }
                                 .background(Color.yaplySurface)
@@ -62,6 +66,7 @@ struct ThreadView: View {
                                 if vm.isLoading {
                                     ProgressView().padding()
                                 } else {
+                                    let positions = BubblePosition.positions(for: vm.replies)
                                     ForEach(vm.replies) { msg in
                                         MessageBubbleView(
                                             message: msg,
@@ -70,7 +75,9 @@ struct ThreadView: View {
                                             replyMessage: replyMessageFor(msg),
                                             reactions: [],
                                             onReply: { _ in },
-                                            onDelete: { _ in }
+                                            onDelete: { _ in },
+                                            groupPosition: positions[msg.id] ?? .single,
+                                            showsSenderName: isGroup
                                         )
                                         .id(msg.id)
                                     }

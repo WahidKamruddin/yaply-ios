@@ -17,6 +17,50 @@ private func systemMessageTab(for content: String) -> String? {
     systemMessageTabMap.first { content.localizedCaseInsensitiveContains($0.pattern) }?.tab
 }
 
+// MARK: - Consecutive-message grouping
+
+/// Where a message sits in a run of consecutive messages from one sender
+/// (Messenger style). Drives which bubble corners get the small "tail" radius,
+/// and whether the avatar (last only) and name (first only) render. Mirrors
+/// web `GroupPosition` in `src/features/chat/lib/messageGrouping.ts` — the
+/// grouping rule must match.
+nonisolated enum BubblePosition {
+    case single, first, middle, last
+
+    var showsAvatar: Bool { self == .single || self == .last }
+    var showsName: Bool { self == .single || self == .first }
+    /// Joined to the message above / below within the same run.
+    var joinsPrevious: Bool { self == .middle || self == .last }
+    var joinsNext: Bool { self == .first || self == .middle }
+
+    private static let maxGap: TimeInterval = 5 * 60
+
+    /// Same sender, neither a system message, same calendar day (no date
+    /// separator between them), and at most 5 minutes apart.
+    private static func continuesRun(_ prev: DecryptedMessage, _ next: DecryptedMessage) -> Bool {
+        guard prev.type != "system", next.type != "system",
+              let sender = prev.senderId, sender == next.senderId,
+              Calendar.current.isDate(prev.createdAt, inSameDayAs: next.createdAt)
+        else { return false }
+        return next.createdAt.timeIntervalSince(prev.createdAt) <= maxGap
+    }
+
+    static func positions(for messages: [DecryptedMessage]) -> [UUID: BubblePosition] {
+        var result: [UUID: BubblePosition] = [:]
+        for (i, msg) in messages.enumerated() {
+            let joinsPrev = i > 0 && continuesRun(messages[i - 1], msg)
+            let joinsNext = i < messages.count - 1 && continuesRun(msg, messages[i + 1])
+            switch (joinsPrev, joinsNext) {
+            case (true, true): result[msg.id] = .middle
+            case (true, false): result[msg.id] = .last
+            case (false, true): result[msg.id] = .first
+            case (false, false): result[msg.id] = .single
+            }
+        }
+        return result
+    }
+}
+
 struct MessageBubbleView: View {
     let message: DecryptedMessage
     let isOwn: Bool
@@ -34,6 +78,14 @@ struct MessageBubbleView: View {
     var onOpenDetail: ((String) -> Void)?
     /// Long-press on the bubble — opens the Messenger-style actions overlay.
     var onLongPress: ((DecryptedMessage) -> Void)?
+    /// Position in a run of consecutive messages from the same sender.
+    var groupPosition: BubblePosition = .single
+    /// Sender names label bubbles only in group chats — in a DM the header
+    /// already says who the other person is.
+    var showsSenderName: Bool = true
+    /// Group chats: this message starts a new sender's run, so it gets extra
+    /// space above to separate speakers.
+    var startsNewSpeaker: Bool = false
 
     var swipeOffset: CGFloat = 0
 
@@ -108,11 +160,16 @@ struct MessageBubbleView: View {
             if isOwn { Spacer(minLength: 60) }
 
             if !isOwn {
-                AvatarView(
-                    url: message.senderProfile?.avatarUrl,
-                    name: message.senderProfile?.name ?? "?",
-                    size: 28
-                )
+                if groupPosition.showsAvatar {
+                    AvatarView(
+                        url: message.senderProfile?.avatarUrl,
+                        name: message.senderProfile?.name ?? "?",
+                        size: 28
+                    )
+                } else {
+                    // Keeps grouped bubbles aligned with the one beside the avatar.
+                    Color.clear.frame(width: 28, height: 28)
+                }
             }
 
             // ZStack lets the reply icon sit behind the bubble column.
@@ -127,7 +184,7 @@ struct MessageBubbleView: View {
                 }
 
                 VStack(alignment: isOwn ? .trailing : .leading, spacing: 4) {
-                    if !isOwn, let profile = message.senderProfile {
+                    if !isOwn, showsSenderName, groupPosition.showsName, let profile = message.senderProfile {
                         Text(profile.name)
                             .font(.caption)
                             .fontWeight(.medium)
@@ -212,7 +269,9 @@ struct MessageBubbleView: View {
             if !isOwn { Spacer(minLength: 60) }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 2)
+        // Tighter spacing inside a run; unchanged at its outer edges.
+        .padding(.top, groupPosition.joinsPrevious ? 1.5 : (startsNewSpeaker ? 6 : 2))
+        .padding(.bottom, groupPosition.joinsNext ? 1.5 : 2)
     }
 
     // MARK: - Read checkmarks
@@ -262,7 +321,7 @@ struct MessageBubbleView: View {
     // MARK: - Bubble content
 
     private var bubbleContent: some View {
-        BubbleContentView(message: message, isOwn: isOwn)
+        BubbleContentView(message: message, isOwn: isOwn, position: groupPosition)
     }
 
     /// `bubbleContent` plus the anchor-tracking + long-press modifiers every
@@ -446,6 +505,7 @@ private struct ReplyQuoteHeightKey: PreferenceKey {
 struct BubbleContentView: View {
     let message: DecryptedMessage
     let isOwn: Bool
+    var position: BubblePosition = .single
 
     @ViewBuilder
     var body: some View {
@@ -457,8 +517,8 @@ struct BubbleContentView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Color.yaplyCard)
-                .clipShape(BubbleShape(isOwn: isOwn))
-                .overlay(BubbleShape(isOwn: isOwn).stroke(Color.yaplyBorderSoft, lineWidth: 1))
+                .clipShape(BubbleShape(isOwn: isOwn, position: position))
+                .overlay(BubbleShape(isOwn: isOwn, position: position).stroke(Color.yaplyBorderSoft, lineWidth: 1))
         } else if message.decryptFailed {
             // Sealed before this device existed (no matching envelope) or a bad
             // wrap/content — an honest, permanent state. Never render raw ciphertext.
@@ -472,8 +532,8 @@ struct BubbleContentView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(Color.yaplyCard)
-            .clipShape(BubbleShape(isOwn: isOwn))
-            .overlay(BubbleShape(isOwn: isOwn).stroke(Color.yaplyBorderSoft, lineWidth: 1))
+            .clipShape(BubbleShape(isOwn: isOwn, position: position))
+            .overlay(BubbleShape(isOwn: isOwn, position: position).stroke(Color.yaplyBorderSoft, lineWidth: 1))
         } else if message.type == "sticker" {
             // Stickers float free — no bubble, no border, larger, with a little pop.
             Group {
@@ -536,9 +596,9 @@ struct BubbleContentView: View {
                         }
                     }
                 )
-                .clipShape(BubbleShape(isOwn: isOwn))
+                .clipShape(BubbleShape(isOwn: isOwn, position: position))
                 .overlay(
-                    BubbleShape(isOwn: isOwn)
+                    BubbleShape(isOwn: isOwn, position: position)
                         .stroke(isOwn ? Color.clear : Color.yaplyBorderSoft, lineWidth: 1)
                 )
         }
@@ -552,8 +612,8 @@ struct BubbleContentView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(Color.yaplyBackground)
-        .clipShape(BubbleShape(isOwn: isOwn))
-        .overlay(BubbleShape(isOwn: isOwn).stroke(Color.yaplyBorder, lineWidth: 1))
+        .clipShape(BubbleShape(isOwn: isOwn, position: position))
+        .overlay(BubbleShape(isOwn: isOwn, position: position).stroke(Color.yaplyBorder, lineWidth: 1))
     }
 }
 
@@ -669,8 +729,12 @@ private struct StickerPopIn: ViewModifier {
 
 // MARK: - BubbleShape
 
+/// Rounded bubble with small-radius "tail" corners on the sender's side.
+/// `.single` / `.first` keep the original standalone tail (bottom corner);
+/// `.middle` tails both corners; `.last` tails only the top corner.
 private struct BubbleShape: Shape {
     let isOwn: Bool
+    var position: BubblePosition = .single
     let radius: CGFloat = 18
 
     func path(in rect: CGRect) -> Path {
@@ -678,18 +742,27 @@ private struct BubbleShape: Shape {
         let tr = CGPoint(x: rect.maxX, y: rect.minY)
         let bl = CGPoint(x: rect.minX, y: rect.maxY)
         let br = CGPoint(x: rect.maxX, y: rect.maxY)
-        let flatRadius: CGFloat = 4
+        // Middle bubbles tuck both inner corners, so they get a slightly
+        // softer radius than a single tail corner.
+        let flatRadius: CGFloat = position == .middle ? 6 : 4
+
+        let tailTop = position.joinsPrevious
+        let tailBottom = position != .last
+        let rTL = !isOwn && tailTop ? flatRadius : radius
+        let rTR = isOwn && tailTop ? flatRadius : radius
+        let rBL = !isOwn && tailBottom ? flatRadius : radius
+        let rBR = isOwn && tailBottom ? flatRadius : radius
 
         var path = Path()
-        path.move(to: CGPoint(x: tl.x + radius, y: tl.y))
-        path.addLine(to: CGPoint(x: tr.x - radius, y: tr.y))
-        path.addQuadCurve(to: CGPoint(x: tr.x, y: tr.y + radius), control: tr)
-        path.addLine(to: CGPoint(x: br.x, y: br.y - (isOwn ? flatRadius : radius)))
-        path.addQuadCurve(to: CGPoint(x: br.x - (isOwn ? flatRadius : radius), y: br.y), control: br)
-        path.addLine(to: CGPoint(x: bl.x + (isOwn ? radius : flatRadius), y: bl.y))
-        path.addQuadCurve(to: CGPoint(x: bl.x, y: bl.y - (isOwn ? radius : flatRadius)), control: bl)
-        path.addLine(to: CGPoint(x: tl.x, y: tl.y + radius))
-        path.addQuadCurve(to: CGPoint(x: tl.x + radius, y: tl.y), control: tl)
+        path.move(to: CGPoint(x: tl.x + rTL, y: tl.y))
+        path.addLine(to: CGPoint(x: tr.x - rTR, y: tr.y))
+        path.addQuadCurve(to: CGPoint(x: tr.x, y: tr.y + rTR), control: tr)
+        path.addLine(to: CGPoint(x: br.x, y: br.y - rBR))
+        path.addQuadCurve(to: CGPoint(x: br.x - rBR, y: br.y), control: br)
+        path.addLine(to: CGPoint(x: bl.x + rBL, y: bl.y))
+        path.addQuadCurve(to: CGPoint(x: bl.x, y: bl.y - rBL), control: bl)
+        path.addLine(to: CGPoint(x: tl.x, y: tl.y + rTL))
+        path.addQuadCurve(to: CGPoint(x: tl.x + rTL, y: tl.y), control: tl)
         path.closeSubpath()
         return path
     }
