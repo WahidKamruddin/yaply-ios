@@ -71,6 +71,19 @@ enum EnvelopeEncryption {
         // so this single binding covers both "query failed" and "no envelope".
         guard let envelope = try? await repository.fetchEnvelope(messageId: messageId, candidateFps: candidates)
         else { return nil }
+        return open(envelope: envelope, content: content, iv: iv, userId: userId)
+    }
+
+    // Same unwrap, but against an envelope that has already been fetched —
+    // used when a whole page's envelopes were pulled in one query instead of
+    // one round-trip per message. Identical failure semantics: nil means a
+    // permanent, honest decrypt failure, never a fall-through to another path.
+    static func open(
+        envelope: MessageEnvelope,
+        content: String,
+        iv: String,
+        userId: UUID
+    ) -> String? {
         // The envelope names the fingerprint it was sealed to, which may be this
         // install's own device key or an escrowed one — pick the matching private
         // key rather than assuming the own pair.

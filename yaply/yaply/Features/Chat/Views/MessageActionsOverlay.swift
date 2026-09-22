@@ -9,11 +9,16 @@ struct MessageActionsOverlay: View {
     let isOwn: Bool
     /// Grouped-run position of the tapped bubble, so the copy's corners match.
     var position: BubblePosition = .single
-    let myReaction: String?
+    /// Every emoji this user currently has on the message — several can be
+    /// highlighted at once (a user may hold multiple simultaneous reactions).
+    let myReactions: Set<String>
     let isPinned: Bool
     let canDelete: Bool
     /// Global-space frame of the bubble that was long-pressed.
     let anchorRect: CGRect
+    /// Group members, for resolving @mentions in decrypted text.
+    var mentionMembers: [MemberSummary] = []
+    var currentUserId: UUID? = nil
 
     let onReact: (String) -> Void
     let onReply: () -> Void
@@ -49,7 +54,7 @@ struct MessageActionsOverlay: View {
                     .onTapGesture { dismiss() }
 
                 // The bubble — held in place (only moves with the shared dy).
-                BubbleContentView(message: message, isOwn: isOwn, position: position)
+                BubbleContentView(message: message, isOwn: isOwn, position: position, mentionMembers: mentionMembers, currentUserId: currentUserId)
                     .frame(width: anchorRect.width, alignment: isOwn ? .trailing : .leading)
                     .position(x: anchorRect.midX, y: anchorRect.midY + dy)
                     .allowsHitTesting(false)
@@ -129,7 +134,7 @@ struct MessageActionsOverlay: View {
                         .font(.system(size: 27))
                         .frame(width: 38, height: 38)
                         .background(
-                            Circle().fill(myReaction == emoji ? Color.yaplyAccent.opacity(0.22) : Color.clear)
+                            Circle().fill(myReactions.contains(emoji) ? Color.yaplyAccent.opacity(0.22) : Color.clear)
                         )
                 }
                 .buttonStyle(.plain)

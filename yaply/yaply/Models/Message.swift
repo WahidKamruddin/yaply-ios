@@ -18,6 +18,13 @@ struct DbMessage: Codable, Identifiable {
     var deletedAt: Date?
     let createdAt: Date
     var senderProfile: Profile?
+    // Group-chat-only @mention targeting — a plaintext side-channel beside
+    // encrypted content, since the server can't read ciphertext to fan out
+    // mention-aware push/badge notifications. See ../CLAUDE.md's mentions section.
+    // Decoded defensively: an old cached row (or a row from before this column
+    // existed) must not throw.
+    var mentionedUserIds: [UUID] = []
+    var mentionsEveryone: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -34,6 +41,55 @@ struct DbMessage: Codable, Identifiable {
         case deletedAt       = "deleted_at"
         case createdAt       = "created_at"
         case senderProfile   = "profiles"
+        case mentionedUserIds = "mentioned_user_ids"
+        case mentionsEveryone = "mentions_everyone"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        conversationId = try c.decode(UUID.self, forKey: .conversationId)
+        senderId = try c.decodeIfPresent(UUID.self, forKey: .senderId)
+        content = try c.decode(String.self, forKey: .content)
+        iv = try c.decodeIfPresent(String.self, forKey: .iv)
+        encV = try c.decodeIfPresent(Int.self, forKey: .encV)
+        type = try c.decode(String.self, forKey: .type)
+        mediaUrl = try c.decodeIfPresent(String.self, forKey: .mediaUrl)
+        mediaMime = try c.decodeIfPresent(String.self, forKey: .mediaMime)
+        replyToId = try c.decodeIfPresent(UUID.self, forKey: .replyToId)
+        threadId = try c.decodeIfPresent(UUID.self, forKey: .threadId)
+        editedAt = try c.decodeIfPresent(Date.self, forKey: .editedAt)
+        deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        senderProfile = try c.decodeIfPresent(Profile.self, forKey: .senderProfile)
+        mentionedUserIds = (try c.decodeIfPresent([UUID].self, forKey: .mentionedUserIds)) ?? []
+        mentionsEveryone = (try c.decodeIfPresent(Bool.self, forKey: .mentionsEveryone)) ?? false
+    }
+
+    init(
+        id: UUID, conversationId: UUID, senderId: UUID?, content: String, iv: String? = nil,
+        encV: Int? = nil, type: String, mediaUrl: String? = nil, mediaMime: String? = nil,
+        replyToId: UUID? = nil, threadId: UUID? = nil, editedAt: Date? = nil, deletedAt: Date? = nil,
+        createdAt: Date, senderProfile: Profile? = nil,
+        mentionedUserIds: [UUID] = [], mentionsEveryone: Bool = false
+    ) {
+        self.id = id
+        self.conversationId = conversationId
+        self.senderId = senderId
+        self.content = content
+        self.iv = iv
+        self.encV = encV
+        self.type = type
+        self.mediaUrl = mediaUrl
+        self.mediaMime = mediaMime
+        self.replyToId = replyToId
+        self.threadId = threadId
+        self.editedAt = editedAt
+        self.deletedAt = deletedAt
+        self.createdAt = createdAt
+        self.senderProfile = senderProfile
+        self.mentionedUserIds = mentionedUserIds
+        self.mentionsEveryone = mentionsEveryone
     }
 
     var isDeleted: Bool { deletedAt != nil }
@@ -90,6 +146,9 @@ struct SendMessageParams: Encodable {
     let mediaMime: String?
     let replyToId: UUID?
     let threadId: UUID?
+    // Group-chat-only; always empty/false outside groups. See DbMessage.
+    let mentionedUserIds: [UUID]
+    let mentionsEveryone: Bool
 
     enum CodingKeys: String, CodingKey {
         case conversationId = "conversation_id"
@@ -99,6 +158,8 @@ struct SendMessageParams: Encodable {
         case mediaMime      = "media_mime"
         case replyToId      = "reply_to_id"
         case threadId       = "thread_id"
+        case mentionedUserIds = "mentioned_user_ids"
+        case mentionsEveryone = "mentions_everyone"
     }
 
     init(
@@ -110,7 +171,9 @@ struct SendMessageParams: Encodable {
         mediaUrl: String? = nil,
         mediaMime: String? = nil,
         replyToId: UUID? = nil,
-        threadId: UUID? = nil
+        threadId: UUID? = nil,
+        mentionedUserIds: [UUID] = [],
+        mentionsEveryone: Bool = false
     ) {
         self.conversationId = conversationId
         self.senderId = senderId
@@ -121,6 +184,8 @@ struct SendMessageParams: Encodable {
         self.mediaMime = mediaMime
         self.replyToId = replyToId
         self.threadId = threadId
+        self.mentionedUserIds = mentionedUserIds
+        self.mentionsEveryone = mentionsEveryone
     }
 }
 

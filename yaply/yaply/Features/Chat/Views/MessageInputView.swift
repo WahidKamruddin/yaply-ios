@@ -22,11 +22,59 @@ struct MessageInputView: View {
     var onStopTyping: (() -> Void)? = nil
     /// A sticker/image pasted from the clipboard (e.g. a sticker copied in Messages).
     var onPasteImage: ((UIImage) -> Void)? = nil
+    /// Fires when the text field gains/loses focus, so the host can keep the
+    /// bottom of the message list visible as the keyboard opens/closes.
+    var onFocusChange: (Bool) -> Void = { _ in }
+    /// @mentions only exist in group chats — both default to disabled so DM/
+    /// thread hosts that don't pass them get plain composer behavior.
+    var members: [MemberSummary] = []
+    var isGroup: Bool = false
 
     @State private var showCommandPalette = false
     @State private var canPasteImage = false
     @State private var menuExpanded = false
+    @State private var mentionDismissedForQuery: String? = nil
     @FocusState private var isFocused: Bool
+
+    // SwiftUI's TextField exposes no caret position, so — unlike the web
+    // composer, which tracks the real caret — this treats the trailing
+    // @-token as active. Equivalent in practice since typing only appends.
+    private var mentionQuery: (query: String, start: String.Index, end: String.Index)? {
+        guard isGroup, !text.hasPrefix("/") else { return nil }
+        return Mentions.activeMentionQuery(text: text, caretIndex: text.endIndex)
+    }
+
+    private var mentionCandidates: [MentionOption] {
+        guard let mentionQuery else { return [] }
+        let query = mentionQuery.query
+        var options: [MentionOption] = []
+        if Mentions.everyone.hasPrefix(query) {
+            options.append(MentionOption(id: "everyone", everyone: true, userId: nil, username: Mentions.everyone, displayName: "Notify everyone", avatarUrl: nil))
+        }
+        for m in members {
+            let uname = m.profile.username.lowercased()
+            let dname = (m.profile.displayName ?? "").lowercased()
+            guard uname.hasPrefix(query) || dname.hasPrefix(query) else { continue }
+            options.append(MentionOption(id: m.userId.uuidString, everyone: false, userId: m.userId, username: m.profile.username, displayName: m.profile.name, avatarUrl: m.profile.avatarUrl))
+            if options.count >= 8 { break }
+        }
+        return options
+    }
+
+    // Escape-equivalent: tapping outside doesn't exist here since there's no
+    // keyboard nav, but this still lets a caller dismiss the palette for the
+    // in-progress token without it reappearing until a new one starts.
+    private var showMentionPalette: Bool {
+        guard let mentionQuery else { return false }
+        return !mentionCandidates.isEmpty && mentionDismissedForQuery != mentionQuery.query
+    }
+
+    private func selectMention(_ option: MentionOption) {
+        guard let mentionQuery else { return }
+        let insert = "@\(option.username) "
+        text = text.replacingCharacters(in: mentionQuery.start..<mentionQuery.end, with: insert)
+        mentionDismissedForQuery = nil
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,6 +89,16 @@ struct MessageInputView: View {
                     showCommandPalette = false
                     isFocused = true
                 })
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if showMentionPalette {
+                MentionPaletteView(
+                    options: mentionCandidates,
+                    onSelect: { option in
+                        selectMention(option)
+                        isFocused = true
+                    },
+                    onDismiss: { mentionDismissedForQuery = mentionQuery?.query }
+                )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
@@ -183,6 +241,7 @@ struct MessageInputView: View {
                     menuExpanded = false
                 }
             }
+            onFocusChange(focused)
         }
         .onAppear { canPasteImage = UIPasteboard.general.hasImages }
         .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in

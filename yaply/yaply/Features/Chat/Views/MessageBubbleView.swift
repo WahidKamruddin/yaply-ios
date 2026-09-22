@@ -63,7 +63,34 @@ nonisolated enum BubblePosition {
     }
 }
 
-struct MessageBubbleView: View {
+struct MessageBubbleView: View, Equatable {
+    /// Compares only the values that affect what the bubble draws.
+    ///
+    /// The nine callbacks and the anchor store are deliberately excluded. They
+    /// are closures and a class reference, so they are never equal between two
+    /// evaluations of the parent — which meant SwiftUI's structural-equality
+    /// fast path could never skip a row, and every visible bubble re-ran its
+    /// body whenever ChatView re-evaluated. Skipping a row keeps the previously
+    /// built closures, which is safe: they capture @State storage boxes and the
+    /// view model by reference, so they still read and write current values.
+    ///
+    /// Anything added here that changes rendering MUST be added to this list,
+    /// or the bubble will render stale.
+    static func == (lhs: MessageBubbleView, rhs: MessageBubbleView) -> Bool {
+        lhs.message == rhs.message
+            && lhs.isOwn == rhs.isOwn
+            && lhs.currentUserId == rhs.currentUserId
+            && lhs.replyMessage == rhs.replyMessage
+            && lhs.threadCount == rhs.threadCount
+            && lhs.isRead == rhs.isRead
+            && lhs.reactions == rhs.reactions
+            && lhs.groupPosition == rhs.groupPosition
+            && lhs.showsSenderName == rhs.showsSenderName
+            && lhs.startsNewSpeaker == rhs.startsNewSpeaker
+            && lhs.mentionMembers == rhs.mentionMembers
+            && lhs.swipeOffset == rhs.swipeOffset
+    }
+
     let message: DecryptedMessage
     let isOwn: Bool
     let currentUserId: UUID
@@ -83,6 +110,9 @@ struct MessageBubbleView: View {
     var onOpenItem: ((SystemItem) -> Void)?
     /// Long-press on the bubble — opens the Messenger-style actions overlay.
     var onLongPress: ((DecryptedMessage) -> Void)?
+    /// Shared, non-observed frame store the actions overlay and the keyboard
+    /// handler read from. Writing to it must never invalidate a view.
+    var anchorStore: BubbleAnchorStore?
     /// Position in a run of consecutive messages from the same sender.
     var groupPosition: BubblePosition = .single
     /// Sender names label bubbles only in group chats — in a DM the header
@@ -91,6 +121,9 @@ struct MessageBubbleView: View {
     /// Group chats: this message starts a new sender's run, so it gets extra
     /// space above to separate speakers.
     var startsNewSpeaker: Bool = false
+    /// Group members, for resolving @mentions in decrypted text. Empty
+    /// (DMs, threads that don't pass it) just renders content as plain text.
+    var mentionMembers: [MemberSummary] = []
 
     var swipeOffset: CGFloat = 0
 
@@ -374,21 +407,26 @@ struct MessageBubbleView: View {
     // MARK: - Bubble content
 
     private var bubbleContent: some View {
-        BubbleContentView(message: message, isOwn: isOwn, position: groupPosition)
+        BubbleContentView(message: message, isOwn: isOwn, position: groupPosition, mentionMembers: mentionMembers, currentUserId: currentUserId)
     }
 
     /// `bubbleContent` plus the anchor-tracking + long-press modifiers every
     /// reply layout (underlap or plain-pill) needs applied identically.
     private var decoratedBubbleContent: some View {
         bubbleContent
-            .background(
-                GeometryReader { g in
-                    Color.clear.preference(
-                        key: BubbleAnchorKey.self,
-                        value: [message.id: g.frame(in: .global)]
-                    )
-                }
-            )
+            // Writes straight into the shared store instead of publishing a
+            // preference. Same data, but no tree walk and no state
+            // invalidation, so scrolling no longer re-evaluates ChatView.
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .global)
+            } action: { rect in
+                anchorStore?.frames[message.id] = rect
+            }
+            // Keeps the store bounded to what is actually on screen, which is
+            // also exactly the set the keyboard handler wants to search.
+            .onDisappear {
+                anchorStore?.frames.removeValue(forKey: message.id)
+            }
             .onLongPressGesture(minimumDuration: 0.3) {
                 guard !message.isDeleted else { return }
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -559,6 +597,26 @@ struct BubbleContentView: View {
     let message: DecryptedMessage
     let isOwn: Bool
     var position: BubblePosition = .single
+    /// Group members, for resolving @mentions. Empty (DMs) just renders
+    /// content as plain text.
+    var mentionMembers: [MemberSummary] = []
+    var currentUserId: UUID? = nil
+
+    @Environment(\.displayScale) private var displayScale
+
+    /// Largest a media bubble is ever drawn, in points. Doubles as the
+    /// downsampling target (x displayScale) so Kingfisher decodes and caches a
+    /// bitmap the size of the bubble rather than the size of the original file.
+    static let mediaMaxWidth: CGFloat = 240
+    static let mediaMaxHeight: CGFloat = 300
+    static let stickerMaxSide: CGFloat = 150
+
+    /// Pixel target for the on-screen size above. Without this Kingfisher keeps
+    /// the full-resolution decode in memory -- a photo from before the upload
+    /// fix is 3840px, i.e. a ~44MB bitmap, to fill a 240pt box.
+    private func downsampleTarget(_ size: CGSize) -> CGSize {
+        CGSize(width: size.width * displayScale, height: size.height * displayScale)
+    }
 
     @ViewBuilder
     var body: some View {
@@ -591,13 +649,17 @@ struct BubbleContentView: View {
             // Stickers float free — no bubble, no border, larger, with a little pop.
             Group {
                 if let url = message.mediaUrl.flatMap(URL.init) {
+                    // Deliberately NOT downsampled: a DownsamplingImageProcessor
+                    // resolves animated data to a single static frame, which
+                    // would freeze animated stickers. Stickers are capped at
+                    // 150pt and uploaded at 512px, so the decode is cheap anyway.
                     KFAnimatedImage(url)
                         .configure { $0.contentMode = .scaleAspectFit }
                         .placeholder {
                             ProgressView().tint(Color.yaplyAccent).frame(width: 120, height: 120)
                         }
                         .fade(duration: 0.15)
-                        .frame(maxWidth: 150, maxHeight: 150)
+                        .frame(maxWidth: Self.stickerMaxSide, maxHeight: Self.stickerMaxSide)
                         .shadow(color: Color.yaplyShadow, radius: 3, y: 2)
                 } else {
                     // Optimistic row while the PNG uploads.
@@ -614,13 +676,29 @@ struct BubbleContentView: View {
             FileAttachmentBubble(url: url, isOwn: isOwn)
         } else if message.isMedia, let urlString = message.mediaUrl, let url = URL(string: urlString) {
             // No bubble — a plain rounded card, matching the web app.
+            // The placeholder and the loaded image are given the SAME aspect
+            // ratio, so the row is laid out at its final height from the first
+            // frame. Previously the placeholder was a fixed 200x140 and the
+            // image sized itself intrinsically, so every load resized its row
+            // and shoved the rest of the list -- with an animation attached.
+            let ratio = MediaAspectRatio.known(for: urlString) ?? MediaAspectRatio.unknown
             KFImage(url)
+                .downsampling(size: downsampleTarget(
+                    CGSize(width: Self.mediaMaxWidth, height: Self.mediaMaxHeight)
+                ))
+                .backgroundDecode()
+                .cacheOriginalImage()
+                .onSuccess { result in
+                    // Teaches the cache the true ratio for images with no `#ar=`
+                    // hint (sent from web, or uploaded before the hint existed):
+                    // they settle after one appearance instead of every time.
+                    MediaAspectRatio.remember(urlString, size: result.image.size)
+                }
                 .placeholder {
                     ZStack {
                         RoundedRectangle(cornerRadius: 14).fill(Color.yaplyBackground)
                         ProgressView().tint(Color.yaplyAccent)
                     }
-                    .frame(width: 200, height: 140)
                 }
                 .onFailureView {
                     mediaPill(systemImage: "photo", label: "Image unavailable")
@@ -628,10 +706,11 @@ struct BubbleContentView: View {
                 .fade(duration: 0.15)
                 .resizable()
                 .scaledToFit()
-                .frame(maxWidth: 240, maxHeight: 300)
+                .aspectRatio(ratio, contentMode: .fit)
+                .frame(maxWidth: Self.mediaMaxWidth, maxHeight: Self.mediaMaxHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
         } else {
-            Text(message.content)
+            Text(mentionAttributedContent)
                 .font(.system(size: 15))
                 .foregroundStyle(isOwn ? .white : Color.yaplyPrimary)
                 .padding(.horizontal, 14)
@@ -655,6 +734,46 @@ struct BubbleContentView: View {
                         .stroke(isOwn ? Color.clear : Color.yaplyBorderSoft, lineWidth: 1)
                 )
         }
+    }
+
+    // AttributedString rather than Text + `+` concatenation — that keeps line
+    // wrapping correct across mention/plain runs. Mention runs are colored
+    // (accent on incoming, white+underline on own); a self-mention (@everyone
+    // or @me) additionally gets a subtle fill so being mentioned reads as
+    // visually distinct from mentioning someone else. Mirrors web's
+    // MessageBubble.tsx renderMentions.
+    private var mentionAttributedContent: AttributedString {
+        guard !mentionMembers.isEmpty, message.content.contains("@") else {
+            return AttributedString(message.content)
+        }
+        let candidates = mentionMembers.map { Mentions.Candidate(userId: $0.userId, username: $0.profile.username) }
+        let tokens = Mentions.tokenizeMentions(text: message.content, members: candidates)
+        if tokens.count == 1, case .text = tokens[0] {
+            return AttributedString(message.content)
+        }
+
+        var result = AttributedString()
+        for token in tokens {
+            switch token {
+            case .text(let value):
+                result += AttributedString(value)
+            case .mention(let value, let userId, let everyone):
+                var run = AttributedString(value)
+                let isSelfMention = everyone || (currentUserId != nil && userId == currentUserId)
+                run.font = .system(size: 15, weight: .semibold)
+                if isSelfMention {
+                    run.backgroundColor = Color.yaplyAccent.opacity(0.18)
+                    run.foregroundColor = isOwn ? .white : Color.yaplyAccent
+                } else if isOwn {
+                    run.foregroundColor = .white
+                    run.underlineStyle = .single
+                } else {
+                    run.foregroundColor = Color.yaplyAccent
+                }
+                result += run
+            }
+        }
+        return result
     }
 
     private func mediaPill(systemImage: String, label: String) -> some View {

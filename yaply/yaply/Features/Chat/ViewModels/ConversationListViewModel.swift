@@ -19,13 +19,16 @@ final class ConversationListViewModel {
     var acceptedConversations: [ConversationListItem] { conversations.filter { !$0.isMessageRequest && !$0.isDeclined } }
 
     // What the app icon badge should read. Mirrors push_targets_for_message's
-    // unread_count (migration 00044) — the same conversations the server would
+    // unread_count (migration 00045) — the same conversations the server would
     // have counted, so a locally cleared badge and the next push agree instead of
-    // overwriting each other with different numbers.
+    // overwriting each other with different numbers. A muted conversation now
+    // contributes only its unread @mentions (0 if "mute everything" is also on),
+    // matching the server's per-message mute predicate rather than dropping the
+    // whole conversation.
     var totalUnreadCount: Int {
         conversations
-            .filter { !$0.isMessageRequest && !$0.isDeclined && !$0.isMuted }
-            .reduce(0) { $0 + $1.unreadCount }
+            .filter { !$0.isMessageRequest && !$0.isDeclined }
+            .reduce(0) { $0 + ($1.isMuted ? ($1.muteMentions ? 0 : $1.mentionUnreadCount) : $1.unreadCount) }
     }
 
     // Pending incoming friend-request count for the header badge.
@@ -153,9 +156,20 @@ final class ConversationListViewModel {
         let conv = conversations.first { $0.id == convId }
         guard let conv else { return }
 
+        // The full new row is present on a realtime INSERT — read mention
+        // targeting straight off it rather than re-fetching.
+        let mentionsEveryone = action.record["mentions_everyone"]?.boolValue ?? false
+        let mentionedUserIds = (action.record["mentioned_user_ids"]?.arrayValue ?? [])
+            .compactMap { $0.stringValue }
+            .compactMap(UUID.init)
+        let isMention = mentionsEveryone || (currentUserId.map(mentionedUserIds.contains) ?? false)
+
         // Same suppression the server applies before sending a push, so the
-        // in-app banner and the lock screen never disagree.
-        guard !conv.isMuted, !conv.isMessageRequest, !conv.isDeclined else { return }
+        // in-app banner and the lock screen never disagree. A mention bypasses
+        // "mute chat" but never "mute everything" — and never a message
+        // request/declined conversation, which stay absolute.
+        guard !conv.isMessageRequest, !conv.isDeclined else { return }
+        guard !conv.isMuted || (isMention && !conv.muteMentions) else { return }
 
         let sender = conv.members.first { $0.userId == senderId }
         let senderName = sender?.profile.displayName ?? sender?.profile.username ?? "Someone"

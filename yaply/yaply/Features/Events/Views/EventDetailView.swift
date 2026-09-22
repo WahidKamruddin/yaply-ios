@@ -1,8 +1,11 @@
 import SwiftUI
+import Kingfisher
 
 struct EventDetailView: View {
     let event: YaplyEvent
     let currentUserId: UUID
+
+    @Environment(\.displayScale) private var displayScale
 
     enum SheetKind: Identifiable {
         case lockTime, linkAlbum, linkBudget
@@ -467,15 +470,15 @@ struct EventDetailView: View {
     @ViewBuilder
     private func albumThumb(url: String?) -> some View {
         if let urlStr = url, let parsedUrl = URL(string: urlStr) {
-            AsyncImage(url: parsedUrl) { phase in
-                switch phase {
-                case .success(let img):
-                    img.resizable().scaledToFill()
-                        .frame(width: 28, height: 28)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                default: albumThumbPlaceholder
-                }
-            }
+            KFImage(parsedUrl)
+                .downsampling(size: CGSize(width: 28 * displayScale, height: 28 * displayScale))
+                .backgroundDecode()
+                .placeholder { albumThumbPlaceholder }
+                .onFailureView { albumThumbPlaceholder }
+                .resizable()
+                .scaledToFill()
+                .frame(width: 28, height: 28)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
         } else {
             albumThumbPlaceholder
         }

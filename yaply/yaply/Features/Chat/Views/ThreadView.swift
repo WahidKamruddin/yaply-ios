@@ -5,26 +5,28 @@ struct ThreadView: View {
     let currentUserId: UUID
     /// Sender names show on bubbles only in group chats.
     let isGroup: Bool
+    /// For resolving typed @mentions and highlighting them in bubbles.
+    let members: [MemberSummary]
     @Binding var isPresented: Bool
     @State private var messageText = ""
 
-    init(rootMessage: DecryptedMessage, conversationId: UUID, currentUserId: UUID, isGroup: Bool, isPresented: Binding<Bool>) {
+    init(rootMessage: DecryptedMessage, conversationId: UUID, currentUserId: UUID, isGroup: Bool, members: [MemberSummary] = [], isPresented: Binding<Bool>) {
         _vm = State(initialValue: ThreadViewModel(
             rootMessage: rootMessage,
             conversationId: conversationId,
-            currentUserId: currentUserId
+            currentUserId: currentUserId,
+            isGroup: isGroup,
+            members: members
         ))
         self.currentUserId = currentUserId
         self.isGroup = isGroup
+        self.members = members
         _isPresented = isPresented
     }
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Color.yaplyBackground.ignoresSafeArea()
-
-                VStack(spacing: 0) {
+            VStack(spacing: 0) {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(spacing: 0) {
@@ -44,7 +46,8 @@ struct ThreadView: View {
                                         reactions: [],
                                         onReply: { _ in },
                                         onDelete: { _ in },
-                                        showsSenderName: isGroup
+                                        showsSenderName: isGroup,
+                                        mentionMembers: isGroup ? members : []
                                     )
                                 }
                                 .background(Color.yaplySurface)
@@ -77,7 +80,8 @@ struct ThreadView: View {
                                             onReply: { _ in },
                                             onDelete: { _ in },
                                             groupPosition: positions[msg.id] ?? .single,
-                                            showsSenderName: isGroup
+                                            showsSenderName: isGroup,
+                                            mentionMembers: isGroup ? members : []
                                         )
                                         .id(msg.id)
                                     }
@@ -108,8 +112,8 @@ struct ThreadView: View {
                         disabled: vm.isSending,
                         showAttachments: false
                     )
-                }
             }
+            .background(Color.yaplyBackground.ignoresSafeArea())
             .navigationTitle("Thread")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

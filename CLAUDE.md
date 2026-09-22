@@ -41,6 +41,18 @@ these are the CryptoKit-specific rules that must not drift:
   downgraded to phase-1 or reported as a false failure.
 - **In-memory key caches are keyed by userId** — never a single mutable slot with an
   owner check (see the web file for the sign-out/sign-in race that caused).
+  `KeyStore.privateKeyCache` is `[UUID: [String: PrivateKey]]` (user id, then
+  fingerprint) and is cleared by `storeIdentityKeyPair`, `storeEscrowedKeys` (so
+  `mergeEscrowedKeys` too) and `clearAllKeys`. A **miss is never cached** — pairing
+  can turn one into a hit, and caching nil would make a decrypt failure permanent.
+- **Decrypt a page with one envelope query, not one per message.**
+  `MessageRepository.fetchEnvelopes(messageIds:candidateFps:)` batches (chunked at
+  100) and applies the same candidate-preference rule as the single-message form;
+  `EnvelopeEncryption.open(envelope:...)` is the pure unwrap both paths share.
+  `ChatViewModel.decryptAll` awaits registration **once**, resolves candidate
+  fingerprints **once**, then unwraps in memory. It used to be a serial loop of 50
+  round-trips plus ~100 Keychain reads per page. Failure semantics are unchanged:
+  no envelope on an `enc_v = 2` message is still a permanent, honest failure.
 - **Editing (contract only, no UI):** re-seal with a new message key and replace all
   envelopes in one transaction. Never reuse the old key.
 
@@ -451,6 +463,36 @@ rail floats above and the action card below; the group only shifts vertically
 `MessageBubbleView` no longer uses `.contextMenu` at all. Other gestures: swipe
 right on a bubble = reply; swipe left on own bubble reveals the timestamp
 (`ChatView` owns a single `swipeOffset` so only one shows).
+
+---
+
+## @mentions (group chats only)
+
+Full contract (grammar, wire format, mute model, server suppression) is in
+`../CLAUDE.md`. iOS-specific notes:
+
+- `Features/Chat/Support/Mentions.swift` is the Swift port of
+  `packages/shared/src/mentions.ts` — must match byte-for-byte.
+- **No caret access.** SwiftUI `TextField` exposes no `selectionStart`, so
+  `MessageInputView`'s mention palette treats the **trailing** `@`-token in the
+  string as active (`Mentions.activeMentionQuery(text:caretIndex: text.endIndex)`)
+  rather than faking a caret. Equivalent while typing, since typing only appends.
+  A deliberate, documented divergence from web's real-caret tracking.
+- **Tap-to-select only** — `MentionPaletteView` (modelled on `CommandPaletteView`)
+  has no keyboard navigation, matching the existing slash-command palette's
+  behavior on iOS.
+- `ChatViewModel.conversationMembers` / `.isGroupConversation` are the
+  extraction/autocomplete data source — no extra fetch. `ThreadViewModel` takes
+  its own `members`/`isGroup` (passed from `ChatView`'s `ThreadView(...)` call)
+  since it has no access to the parent's view model.
+- Bubble highlighting: `BubbleContentView.mentionAttributedContent` builds an
+  `AttributedString` (not `Text` + `+`, which breaks line wrapping) from
+  `Mentions.tokenizeMentions`; threaded through `MessageBubbleView` and
+  `MessageActionsOverlay`'s long-press copy, both gated on `mentionMembers`
+  (empty outside groups).
+- The Notification Service Extension needs **no changes** — `send-push` already
+  sets the `"Mentioned you"` fallback body server-side before the payload ships;
+  the extension only ever decrypts, per its existing mandate.
 
 ---
 

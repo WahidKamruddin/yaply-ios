@@ -24,7 +24,32 @@ enum KeyStore {
 
     // MARK: — Identity keypair
 
+    /// Resolved decrypt keys, keyed by **user id first**, then fingerprint.
+    ///
+    /// `privateKey(forFingerprint:userId:)` hits the Keychain twice per call
+    /// (identity pair + escrow list), and decrypting a page calls it once per
+    /// message — so a 50-message page meant ~100 Keychain reads.
+    ///
+    /// The user-id keying is load-bearing, not tidiness: the web client shipped
+    /// a bug where a single mutable slot plus an "is this the same owner?"
+    /// check let a straggling async call from a signed-out account repopulate
+    /// the slot, so every decrypt for the newly signed-in account failed. A
+    /// per-user dictionary cannot express that state. Never replace this with a
+    /// single slot. Any write to the underlying key material clears it.
+    private static var privateKeyCache: [UUID: [String: P256.KeyAgreement.PrivateKey]] = [:]
+
+    private static func invalidatePrivateKeyCache(forUser userId: UUID? = nil) {
+        if let userId {
+            privateKeyCache.removeValue(forKey: userId)
+        } else {
+            privateKeyCache.removeAll()
+        }
+    }
+
     static func storeIdentityKeyPair(_ privateKey: P256.KeyAgreement.PrivateKey) throws {
+        // The identity pair is not per-user in storage, so every user's
+        // resolved keys are now potentially stale.
+        invalidatePrivateKeyCache()
         try KeychainService.save(
             key: identityPrivate,
             data: privateKey.rawRepresentation,  // 32-byte private scalar
@@ -73,6 +98,7 @@ enum KeyStore {
     // messages to them — it keeps its own key for that. They exist solely so
     // history sealed to a device that already existed stays readable here.
     static func storeEscrowedKeys(_ keys: [DevicePairingCrypto.EscrowedKey], forUser userId: UUID) throws {
+        invalidatePrivateKeyCache(forUser: userId)
         let data = try JSONEncoder().encode(keys)
         try KeychainService.save(
             key: escrowPrefix + userId.uuidString,
@@ -130,6 +156,17 @@ enum KeyStore {
     // Resolves the private key that can open an envelope sealed to `fingerprint`
     // — this install's own key, or one adopted via pairing.
     static func privateKey(forFingerprint fingerprint: String, userId: UUID) -> P256.KeyAgreement.PrivateKey? {
+        if let cached = privateKeyCache[userId]?[fingerprint] { return cached }
+        guard let resolved = resolvePrivateKey(forFingerprint: fingerprint, userId: userId) else {
+            // Deliberately not cached: a miss can become a hit once pairing
+            // adopts an escrowed key, and caching nil would make that permanent.
+            return nil
+        }
+        privateKeyCache[userId, default: [:]][fingerprint] = resolved
+        return resolved
+    }
+
+    private static func resolvePrivateKey(forFingerprint fingerprint: String, userId: UUID) -> P256.KeyAgreement.PrivateKey? {
         if let own = try? loadIdentityKeyPair(),
            EncryptionService.fingerprint(for: own.publicKey) == fingerprint {
             return own
@@ -160,6 +197,7 @@ enum KeyStore {
     // MARK: — Clear (called on sign-out and on revocation, mirrors clearAllKeys)
 
     static func clearAllKeys() {
+        invalidatePrivateKeyCache()
         KeychainService.delete(key: identityPrivate)
         KeychainService.delete(key: identityPublic)
         KeychainService.deleteAll(prefix: deviceIdPrefix)

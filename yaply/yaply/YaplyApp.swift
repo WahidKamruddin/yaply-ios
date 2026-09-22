@@ -2,6 +2,7 @@ import SwiftUI
 import Auth
 import Supabase
 import UIKit
+import Kingfisher
 
 @main
 struct YaplyApp: App {
@@ -12,6 +13,35 @@ struct YaplyApp: App {
     @State private var notifications = NotificationManager()
     @State private var pushService = PushNotificationService()
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        Self.configureImageCache()
+    }
+
+    /// Kingfisher shipped on stock defaults, which means a memory cache allowed
+    /// to grow to 25% of physical RAM. Combined with full-resolution decodes
+    /// that was enough to push the app into memory warnings while scrolling a
+    /// photo-heavy conversation -- and an eviction there costs a re-download and
+    /// a re-decode, which is exactly the scroll hitch we were chasing. Explicit,
+    /// modest limits keep the cache useful without letting it become the problem.
+    private static func configureImageCache() {
+        let cache = ImageCache.default
+
+        // Chat images are downsampled to bubble size before they are cached, so
+        // 96MB holds a lot of them. Cap against physical RAM too, for older
+        // devices where a fixed number would be a large share of the total.
+        let physical = ProcessInfo.processInfo.physicalMemory
+        let ceiling = UInt64(Double(physical) * 0.12)
+        cache.memoryStorage.config.totalCostLimit = Int(min(UInt64(96 * 1024 * 1024), ceiling))
+        cache.memoryStorage.config.expiration = .seconds(600)
+
+        // Avatars and chat media change rarely and re-downloading them is the
+        // expensive case, so the disk cache is the one worth keeping generous.
+        cache.diskStorage.config.sizeLimit = 400 * 1024 * 1024
+        cache.diskStorage.config.expiration = .days(14)
+
+        KingfisherManager.shared.downloader.downloadTimeout = 20
+    }
 
     var body: some Scene {
         WindowGroup {

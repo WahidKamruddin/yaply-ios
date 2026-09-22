@@ -14,6 +14,10 @@ final class ThreadViewModel {
     let rootMessage: DecryptedMessage
     private let conversationId: UUID
     private let currentUserId: UUID
+    private let isGroup: Bool
+    // Passed from ChatViewModel.conversationMembers — used to resolve typed
+    // @mentions (needs usernames, unlike resolvedMemberIds() below).
+    private let members: [MemberSummary]
     private let repository = MessageRepository()
     private var realtimeTask: Task<Void, Never>?
     private var realtimeChannel: RealtimeChannelV2?
@@ -21,10 +25,12 @@ final class ThreadViewModel {
     // Loaded lazily from the parent conversation on first send/decrypt.
     private var memberUserIds: [UUID]?
 
-    init(rootMessage: DecryptedMessage, conversationId: UUID, currentUserId: UUID) {
+    init(rootMessage: DecryptedMessage, conversationId: UUID, currentUserId: UUID, isGroup: Bool = false, members: [MemberSummary] = []) {
         self.rootMessage = rootMessage
         self.conversationId = conversationId
         self.currentUserId = currentUserId
+        self.isGroup = isGroup
+        self.members = members
     }
 
     func onAppear() async {
@@ -52,6 +58,16 @@ final class ThreadViewModel {
         isSending = true
         defer { isSending = false }
 
+        // Same plaintext-before-encryption extraction as the main composer
+        // (ChatViewModel.sendMessage) — see ../CLAUDE.md's mentions section.
+        let mentions: (mentionedUserIds: [UUID], mentionsEveryone: Bool) = isGroup
+            ? Mentions.extractMentions(
+                text: text,
+                members: members.map { Mentions.Candidate(userId: $0.userId, username: $0.profile.username) },
+                senderId: currentUserId
+            )
+            : ([], false)
+
         do {
             try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
             let memberIds = await resolvedMemberIds()
@@ -64,14 +80,16 @@ final class ThreadViewModel {
                     pConversationId: conversationId, pContent: sealed.content, pIv: sealed.iv,
                     pEnvelopes: sealed.envelopes, pType: "text",
                     pReplyToId: rootMessage.id, pThreadId: rootMessage.id,
-                    pMediaUrl: nil, pMediaMime: nil
+                    pMediaUrl: nil, pMediaMime: nil,
+                    pMentionedUserIds: mentions.mentionedUserIds, pMentionsEveryone: mentions.mentionsEveryone
                 )
                 sent = try await repository.sendMessageWithEnvelopes(params)
             } else {
                 let params = SendMessageParams(
                     conversationId: conversationId, senderId: currentUserId,
                     content: Data(text.utf8).base64EncodedString(), iv: nil, type: "text",
-                    replyToId: rootMessage.id, threadId: rootMessage.id
+                    replyToId: rootMessage.id, threadId: rootMessage.id,
+                    mentionedUserIds: mentions.mentionedUserIds, mentionsEveryone: mentions.mentionsEveryone
                 )
                 sent = try await repository.sendMessage(params)
             }

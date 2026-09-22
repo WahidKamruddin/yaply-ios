@@ -24,14 +24,16 @@ struct ChatView: View {
     @State private var searchQuery = ""
     @State private var showGroupInfo = false
     @State private var swipeOffset: CGFloat = 0
-    @State private var distFromBottom: CGFloat = 0
-    @State private var viewportHeight: CGFloat = 1
+    // Derived directly in `onScrollGeometryChange` rather than storing the raw
+    // offsets: the old version wrote two continuous CGFloats into @State on
+    // every scroll tick, which re-evaluated this whole body ~60x a second.
+    // Everything downstream only ever wanted this one boolean.
+    @State private var isNearBottom = true
     @State private var newMsgCount = 0
     @State private var commandFeedback: String?
     @State private var comingSoon = false
 
-    private var isNearBottom: Bool { distFromBottom <= viewportHeight }
-    private var showScrollButton: Bool { distFromBottom > viewportHeight }
+    private var showScrollButton: Bool { !isNearBottom }
     @State private var feedbackDismissTask: Task<Void, Never>?
     @State private var showHelp = false
     @State private var isDropTargeted = false
@@ -39,8 +41,22 @@ struct ChatView: View {
     @State private var actionsPosition: BubblePosition = .single
     @State private var actionsAnchorRect: CGRect = .zero
     @State private var messageToDelete: UUID?
-    @State private var bubbleAnchors: [UUID: CGRect] = [:]
+    // Deliberately a reference box and not @State. Bubble frames change on
+    // every scroll frame, so publishing them into view state re-evaluated this
+    // body continuously. Both readers (the long-press overlay anchor, and the
+    // "keep this bubble visible" lookup when the keyboard opens) are
+    // point-in-time reads, so nothing needs to observe the writes.
+    @State private var anchorStore = BubbleAnchorStore()
     @State private var hasScrolledInitially = false
+    @State private var scrollProxy: ScrollViewProxy?
+    @State private var scrollViewFrame: CGRect = .zero
+    // `.scrollDismissesKeyboard(.interactively)` treats ANY content-offset change
+    // on this ScrollView -- not just a user drag -- as a cue to interactively
+    // dismiss the keyboard, which also resigns the just-focused TextField. Our
+    // own focus-triggered scrollTo (below) was tripping that, so the keyboard
+    // would appear then get yanked back down instantly. Disabled for the
+    // duration of that one programmatic scroll.
+    @State private var suppressInteractiveKeyboardDismiss = false
     @Environment(AppRouter.self) private var router
 
     private let convRepository = ConversationRepository()
@@ -62,31 +78,28 @@ struct ChatView: View {
         return currentOtherMember?.profile.name ?? conversationName
     }
 
-    private var displayMessages: [DecryptedMessage] {
-        guard !searchQuery.isEmpty else { return vm.messages }
-        return vm.messages.filter { msg in
+    /// The precomputed layout for the full history, or a freshly built one for
+    /// the filtered subset while a search is active.
+    ///
+    /// The unfiltered case -- which is every case except the user actively
+    /// typing in the search field -- costs nothing here: the view model already
+    /// built it when `messages` last changed. The search case rebuilds, but the
+    /// result set is small and the user is typing anyway.
+    private var layout: MessageListLayout {
+        guard !searchQuery.isEmpty else { return vm.layout }
+        let filtered = vm.messages.filter { msg in
             !msg.isDeleted && msg.isText && msg.content.localizedCaseInsensitiveContains(searchQuery)
         }
-    }
-
-    private var lastOwnMessageId: UUID? {
-        displayMessages.last(where: { $0.senderId == currentUserId && !$0.isDeleted })?.id
-    }
-
-    private var threadCounts: [UUID: Int] {
-        var counts: [UUID: Int] = [:]
-        for msg in vm.messages {
-            if let tid = msg.threadId { counts[tid, default: 0] += 1 }
-        }
-        return counts
+        return MessageListLayout.build(
+            filtered,
+            isGroupConversation: vm.isGroupConversation,
+            currentUserId: currentUserId
+        )
     }
 
     var body: some View {
 
-        ZStack {
-            Color.yaplyBackground.ignoresSafeArea()
-
-            VStack(spacing: 0) {
+        VStack(spacing: 0) {
                 if searchIsActive {
                     HStack(spacing: 8) {
                         Image(systemName: "magnifyingglass")
@@ -129,52 +142,16 @@ struct ChatView: View {
                                     .onAppear { Task { await vm.loadOlderMessages() } }
                             }
 
-                            let grouped = groupByDate(displayMessages)
-                            ForEach(grouped, id: \.date) { group in
+                            let layout = layout
+                            ForEach(layout.groups) { group in
                                 DateSeparatorView(date: group.date)
-                                let positions = BubblePosition.positions(for: group.messages)
-                                let newSpeakerIds: Set<UUID> = vm.isGroupConversation
-                                    ? Set(zip(group.messages, group.messages.dropFirst())
-                                        .filter { $0.senderId != $1.senderId }
-                                        .map { $1.id })
-                                    : []
                                 ForEach(group.messages) { msg in
-                                    let position = positions[msg.id] ?? .single
-                                    MessageBubbleView(
-                                        message: msg,
-                                        isOwn: msg.senderId == currentUserId,
-                                        currentUserId: currentUserId,
-                                        replyMessage: msg.replyToId.flatMap { rid in vm.messages.first { $0.id == rid } },
-                                        threadCount: threadCounts[msg.id] ?? 0,
-                                        isRead: msg.senderId == currentUserId && msg.id == lastOwnMessageId ? vm.readByOtherSet.contains(msg.id) : nil,
-                                        reactions: vm.reactionsMap[msg.id] ?? [],
-                                        onReply: { vm.replyToMessage = $0 },
-                                        onDelete: { id in Task { await vm.deleteMessage(id: id) } },
-                                        onReact: { msgId, emoji in vm.setReaction(messageId: msgId, emoji: emoji) },
-                                        onOpenThread: { threadRoot = $0 },
-                                        onReplyInThread: { threadRoot = $0 },
-                                        onQuotationClick: { id in scrollToId = id },
-                                        onOpenDetail: { openPanel($0) },
-                                        onOpenItem: { item in Task { await openItem(item) } },
-                                        onLongPress: { m in
-                                            actionsAnchorRect = bubbleAnchors[m.id] ?? .zero
-                                            actionsPosition = position
-                                            actionsMessage = m
-                                        },
-                                        groupPosition: position,
-                                        showsSenderName: vm.isGroupConversation,
-                                        startsNewSpeaker: newSpeakerIds.contains(msg.id),
-                                        swipeOffset: swipeOffset
+                                    messageRow(
+                                        msg,
+                                        layout: layout,
+                                        position: layout.positions[msg.id] ?? .single,
+                                        startsNewSpeaker: layout.newSpeakerIds.contains(msg.id)
                                     )
-                                    .opacity(actionsMessage?.id == msg.id ? 0 : 1)
-                                    .id(msg.id)
-                                    .background(highlightedId == msg.id ? Color.yaplyAccent.opacity(0.12) : Color.clear)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                                    .animation(.easeInOut(duration: 0.3), value: highlightedId)
-                                    .transition(.asymmetric(
-                                        insertion: .move(edge: .bottom).combined(with: .opacity),
-                                        removal: .opacity
-                                    ))
                                 }
                             }
 
@@ -219,22 +196,27 @@ struct ChatView: View {
                         .padding(.vertical, 8)
                         .animation(.easeOut(duration: 0.2), value: vm.typingUserIds.isEmpty)
                     }
-                    .scrollDismissesKeyboard(.interactively)
+                    .scrollDismissesKeyboard(suppressInteractiveKeyboardDismiss ? .never : .interactively)
                     .onTapGesture {
                         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                     }
-                    .onPreferenceChange(BubbleAnchorKey.self) { anchors in
-                        bubbleAnchors = anchors
-                    }
-                    .onScrollGeometryChange(for: CGPoint.self) { geo in
-                        CGPoint(
-                            x: geo.contentSize.height - (geo.contentOffset.y + geo.containerSize.height),
-                            y: geo.containerSize.height
-                        )
-                    } action: { _, new in
-                        distFromBottom = max(0, new.x)
-                        viewportHeight = max(1, new.y)
-                        if isNearBottom { newMsgCount = 0 }
+                    .background(
+                        GeometryReader { g in
+                            Color.clear
+                                .onAppear { scrollViewFrame = g.frame(in: .global) }
+                                .onChange(of: g.frame(in: .global)) { _, new in scrollViewFrame = new }
+                        }
+                    )
+                    .onScrollGeometryChange(for: Bool.self) { geo in
+                        // "Near the bottom" == within one viewport of it, same
+                        // rule as before, just evaluated before it reaches @State
+                        // so a write only happens when the answer actually flips.
+                        let distance = geo.contentSize.height
+                            - (geo.contentOffset.y + geo.containerSize.height)
+                        return max(0, distance) <= max(1, geo.containerSize.height)
+                    } action: { _, nearBottom in
+                        isNearBottom = nearBottom
+                        if nearBottom { newMsgCount = 0 }
                     }
                     .overlay(alignment: .bottomTrailing) {
                         if showScrollButton {
@@ -307,6 +289,7 @@ struct ChatView: View {
                         }
                     }
                     .task {
+                        scrollProxy = proxy
                         vm.currentUsername = currentUsername
                         newMsgCount = 0
                         await vm.onAppear()
@@ -397,17 +380,46 @@ struct ChatView: View {
                                 if image.hasAlpha {
                                     await vm.sendStickerMessage(image: image)
                                 } else {
-                                    let resized = image.resized(maxDimension: 1280)
-                                    if let jpeg = resized.jpegData(compressionQuality: 0.82) {
-                                        await vm.sendImageMessage(imageData: jpeg, mimeType: "image/jpeg")
+                                    if let photo = await MediaEncoding.photoJPEG(image) {
+                                        await vm.sendImageMessage(imageData: photo.data, mimeType: "image/jpeg", pixelSize: photo.size)
                                     }
                                 }
                             }
-                        }
+                        },
+                        onFocusChange: { focused in
+                            guard let scrollProxy else { return }
+                            if focused {
+                                // Keep whatever the user is currently reading in view as the
+                                // keyboard opens, instead of only doing this near the bottom —
+                                // find the lowest bubble still fully on-screen right now and
+                                // pin it above the keyboard, wherever in the history that is.
+                                // Captured synchronously (pre-keyboard geometry); the actual
+                                // scroll is deferred a tick below.
+                                let lastVisibleId = anchorStore.frames
+                                    .filter { $0.value.maxY <= scrollViewFrame.maxY + 1 && $0.value.maxY >= scrollViewFrame.minY }
+                                    .max(by: { $0.value.maxY < $1.value.maxY })?.key
+                                performKeyboardScroll(scrollProxy) {
+                                    if let lastVisibleId {
+                                        scrollProxy.scrollTo(lastVisibleId, anchor: .bottom)
+                                    } else {
+                                        scrollProxy.scrollTo("bottom", anchor: .bottom)
+                                    }
+                                }
+                            } else if isNearBottom {
+                                // Mirror the push-up: once the keyboard is gone and the list
+                                // regains that space, settle back to the true bottom instead
+                                // of leaving a gap where the last visible bubble was pinned.
+                                performKeyboardScroll(scrollProxy) {
+                                    scrollProxy.scrollTo("bottom", anchor: .bottom)
+                                }
+                            }
+                        },
+                        members: vm.conversationMembers,
+                        isGroup: vm.isGroupConversation
                     )
                 }
-            }
         }
+        .background(Color.yaplyBackground.ignoresSafeArea())
         .onDrop(of: [.image], isTargeted: $isDropTargeted) { providers in
             handleDroppedProviders(providers)
         }
@@ -434,11 +446,13 @@ struct ChatView: View {
                     message: m,
                     isOwn: m.senderId == currentUserId,
                     position: actionsPosition,
-                    myReaction: vm.myReaction(for: m.id),
+                    myReactions: vm.myReactions(for: m.id),
                     isPinned: vm.isPinned(m.id),
                     canDelete: m.senderId == currentUserId,
                     anchorRect: actionsAnchorRect,
-                    onReact: { emoji in vm.setReaction(messageId: m.id, emoji: emoji) },
+                    mentionMembers: vm.isGroupConversation ? vm.conversationMembers : [],
+                    currentUserId: currentUserId,
+                    onReact: { emoji in vm.toggleReaction(messageId: m.id, emoji: emoji) },
                     onReply: { vm.replyToMessage = m },
                     onCopy: {
                         UIPasteboard.general.string = m.isText ? m.content : (m.mediaUrl ?? "")
@@ -523,9 +537,10 @@ struct ChatView: View {
         }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { image in
-                let resized = image.resized(maxDimension: 1280)
-                if let jpeg = resized.jpegData(compressionQuality: 0.82) {
-                    Task { await vm.sendImageMessage(imageData: jpeg, mimeType: "image/jpeg") }
+                Task {
+                    if let photo = await MediaEncoding.photoJPEG(image) {
+                        await vm.sendImageMessage(imageData: photo.data, mimeType: "image/jpeg", pixelSize: photo.size)
+                    }
                 }
             }
             .ignoresSafeArea()
@@ -535,10 +550,8 @@ struct ChatView: View {
             guard let item else { return }
             Task {
                 if let data = try? await item.loadTransferable(type: Data.self),
-                   let original = UIImage(data: data) {
-                    let resized = original.resized(maxDimension: 1280)
-                    let compressed = resized.jpegData(compressionQuality: 0.82) ?? data
-                    await vm.sendImageMessage(imageData: compressed, mimeType: "image/jpeg")
+                   let photo = await MediaEncoding.photoJPEG(from: data) {
+                    await vm.sendImageMessage(imageData: photo.data, mimeType: "image/jpeg", pixelSize: photo.size)
                 }
                 photoItem = nil
             }
@@ -572,6 +585,7 @@ struct ChatView: View {
                 conversationId: conversationId,
                 currentUserId: currentUserId,
                 isGroup: vm.isGroupConversation,
+                members: vm.conversationMembers,
                 isPresented: Binding(
                     get: { threadRoot != nil },
                     set: { if !$0 { threadRoot = nil } }
@@ -619,9 +633,8 @@ struct ChatView: View {
                 if image.hasAlpha {
                     await vm.sendStickerMessage(image: image)
                 } else {
-                    let resized = image.resized(maxDimension: 1280)
-                    guard let jpeg = resized.jpegData(compressionQuality: 0.82) else { return }
-                    await vm.sendImageMessage(imageData: jpeg, mimeType: "image/jpeg")
+                    guard let photo = await MediaEncoding.photoJPEG(image) else { return }
+                    await vm.sendImageMessage(imageData: photo.data, mimeType: "image/jpeg", pixelSize: photo.size)
                 }
             }
         }
@@ -675,6 +688,25 @@ struct ChatView: View {
         openPanel(item.kind.tab)
     }
 
+    /// Shared by the focus-gained and focus-lost keyboard scroll adjustments.
+    /// Scrolling in the same transaction as the @FocusState change can make
+    /// SwiftUI drop the pending responder assignment, so it's deferred a tick.
+    /// Interactive-dismiss is also suppressed for the duration: it treats any
+    /// offset change on this ScrollView -- not just a user drag -- as a cue to
+    /// dismiss the keyboard, which would resign focus right back off.
+    private func performKeyboardScroll(_ proxy: ScrollViewProxy, _ scroll: @escaping () -> Void) {
+        suppressInteractiveKeyboardDismiss = true
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.25)) {
+                scroll()
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                suppressInteractiveKeyboardDismiss = false
+            }
+        }
+    }
+
     private func handleMessageCountChange(proxy: ScrollViewProxy) {
         guard let last = vm.messages.last else { return }
         if last.senderId == currentUserId || isNearBottom {
@@ -686,24 +718,59 @@ struct ChatView: View {
         }
     }
 
-    private func groupByDate(_ messages: [DecryptedMessage]) -> [(date: Date, messages: [DecryptedMessage])] {
-        var groups: [(date: Date, messages: [DecryptedMessage])] = []
-        var lastDate: Date?
-        var current: [DecryptedMessage] = []
-        for msg in messages {
-            let day = Calendar.current.startOfDay(for: msg.createdAt)
-            if let last = lastDate, Calendar.current.isDate(day, inSameDayAs: last) {
-                current.append(msg)
-            } else {
-                if !current.isEmpty { groups.append((date: lastDate!, messages: current)) }
-                lastDate = day
-                current = [msg]
-            }
-        }
-        if !current.isEmpty, let last = lastDate {
-            groups.append((date: last, messages: current))
-        }
-        return groups
+    /// One message row. Extracted from `body` because inlining it pushed the
+    /// body past the Swift type-checker's budget ("unable to type-check this
+    /// expression in reasonable time") -- and because a smaller body is cheaper
+    /// for SwiftUI to re-evaluate.
+    @ViewBuilder
+    private func messageRow(
+        _ msg: DecryptedMessage,
+        layout: MessageListLayout,
+        position: BubblePosition,
+        startsNewSpeaker: Bool
+    ) -> some View {
+        MessageBubbleView(
+            message: msg,
+            isOwn: msg.senderId == currentUserId,
+            currentUserId: currentUserId,
+            replyMessage: msg.replyToId.flatMap { layout.messagesById[$0] },
+            threadCount: layout.threadCounts[msg.id] ?? 0,
+            isRead: msg.senderId == currentUserId && msg.id == layout.lastOwnMessageId
+                ? vm.readByOtherSet.contains(msg.id)
+                : nil,
+            reactions: vm.reactionsMap[msg.id] ?? [],
+            onReply: { vm.replyToMessage = $0 },
+            onDelete: { id in Task { await vm.deleteMessage(id: id) } },
+            onReact: { msgId, emoji in vm.toggleReaction(messageId: msgId, emoji: emoji) },
+            onOpenThread: { threadRoot = $0 },
+            onReplyInThread: { threadRoot = $0 },
+            onQuotationClick: { id in scrollToId = id },
+            onOpenDetail: { openPanel($0) },
+            onOpenItem: { item in Task { await openItem(item) } },
+            onLongPress: { m in
+                actionsAnchorRect = anchorStore.frames[m.id] ?? .zero
+                actionsPosition = position
+                actionsMessage = m
+            },
+            anchorStore: anchorStore,
+            groupPosition: position,
+            showsSenderName: vm.isGroupConversation,
+            startsNewSpeaker: startsNewSpeaker,
+            mentionMembers: vm.isGroupConversation ? vm.conversationMembers : [],
+            swipeOffset: swipeOffset
+        )
+        // Gated on the == above, so a ChatView re-evaluation no longer forces
+        // every visible bubble to rebuild its body.
+        .equatable()
+        .opacity(actionsMessage?.id == msg.id ? 0 : 1)
+        .id(msg.id)
+        .background(highlightedId == msg.id ? Color.yaplyAccent.opacity(0.12) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .animation(.easeInOut(duration: 0.3), value: highlightedId)
+        .transition(.asymmetric(
+            insertion: .move(edge: .bottom).combined(with: .opacity),
+            removal: .opacity
+        ))
     }
 
     private func handleCommand(_ cmd: ParsedCommand) async {
@@ -867,11 +934,18 @@ private struct HelpView: View {
 
 // MARK: - Bubble anchor tracking (for the long-press actions overlay)
 
-struct BubbleAnchorKey: PreferenceKey {
-    static let defaultValue: [UUID: CGRect] = [:]
-    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
-        value.merge(nextValue()) { _, new in new }
-    }
+/// Bubble frames in global coordinates, written by each visible
+/// `MessageBubbleView` and read only on demand.
+///
+/// This replaces a `PreferenceKey` that carried the same data. A preference
+/// propagates up the entire view tree and lands in `@State`, so publishing a
+/// `.frame(in: .global)` through one meant a full tree walk plus a body
+/// invalidation for every visible row on every frame of every scroll. Nothing
+/// actually observes these values -- they are read once when a long press opens
+/// the actions overlay, and once when the keyboard appears -- so a plain
+/// reference type with no observation is the right storage.
+final class BubbleAnchorStore {
+    var frames: [UUID: CGRect] = [:]
 }
 
 // MARK: - Pinned message banner

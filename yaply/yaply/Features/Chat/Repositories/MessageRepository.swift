@@ -203,6 +203,52 @@ final class MessageRepository {
         return rows.first
     }
 
+    /// Batched form of `fetchEnvelope`, for decrypting a whole page at once.
+    ///
+    /// Decrypting a 50-message page used to make 50 sequential round-trips --
+    /// one per message, each awaited before the next began -- which is the bulk
+    /// of the delay when opening a conversation. Same selection rule as the
+    /// single-message version: a message can match several candidate
+    /// fingerprints, and the earliest candidate wins so this device's own key is
+    /// preferred over an escrowed one.
+    func fetchEnvelopes(
+        messageIds: [UUID],
+        candidateFps: [String]
+    ) async throws -> [UUID: MessageEnvelope] {
+        guard !candidateFps.isEmpty, !messageIds.isEmpty else { return [:] }
+
+        // Chunked so the PostgREST `in` list can't produce an over-long URL.
+        var rows: [MessageEnvelope] = []
+        for chunk in stride(from: 0, to: messageIds.count, by: 100).map({
+            Array(messageIds[$0..<min($0 + 100, messageIds.count)])
+        }) {
+            let page: [MessageEnvelope] = try await supabase
+                .from("message_envelopes")
+                .select("message_id, recipient_user_id, recipient_fp, eph_pub, key_iv, wrapped_key")
+                .in("message_id", values: chunk.map(\.uuidString))
+                .in("recipient_fp", values: candidateFps)
+                .execute()
+                .value
+            rows.append(contentsOf: page)
+        }
+
+        let rank = Dictionary(
+            uniqueKeysWithValues: candidateFps.enumerated().map { ($1, $0) }
+        )
+        var best: [UUID: MessageEnvelope] = [:]
+        for row in rows {
+            guard let mid = row.messageId else { continue }
+            let incoming = rank[row.recipientFp] ?? Int.max
+            if let existing = best[mid] {
+                let current = rank[existing.recipientFp] ?? Int.max
+                if incoming < current { best[mid] = row }
+            } else {
+                best[mid] = row
+            }
+        }
+        return best
+    }
+
     func softDelete(messageId: UUID) async throws {
         struct DeleteUpdate: Encodable { let deleted_at: String }
         try await supabase
@@ -304,17 +350,6 @@ final class MessageRepository {
             .eq("message_id", value: messageId.uuidString)
             .eq("user_id", value: userId.uuidString)
             .eq("emoji", value: emoji)
-            .execute()
-    }
-
-    /// Clears every reaction this user has on a message — used before applying a
-    /// new one so a user only ever holds a single reaction (Messenger / Instagram).
-    func removeAllReactions(messageId: UUID, userId: UUID) async throws {
-        try await supabase
-            .from("message_reactions")
-            .delete()
-            .eq("message_id", value: messageId.uuidString)
-            .eq("user_id", value: userId.uuidString)
             .execute()
     }
 

@@ -27,6 +27,7 @@ struct GroupInfoView: View {
     @State private var showDeleteGroupConfirm = false
     @State private var isDeletingGroup = false
     @State private var isMuted = false
+    @State private var muteMentions = false
     @State private var muteStateLoaded = false
     @State private var isBusy = false
     @State private var showLeaveConfirm = false
@@ -133,7 +134,7 @@ struct GroupInfoView: View {
                 }
 
                 // Chat settings
-                Section("Settings") {
+                Section {
                     Toggle(isOn: $isMuted) {
                         Label("Mute notifications", systemImage: "bell.slash")
                             .foregroundStyle(Color.yaplyPrimary)
@@ -142,7 +143,27 @@ struct GroupInfoView: View {
                     .disabled(isBusy)
                     .onChange(of: isMuted) { _, on in
                         guard muteStateLoaded else { return }
+                        if !on { muteMentions = false }
                         Task { await setMute(on) }
+                    }
+
+                    if !isDirect, isMuted {
+                        Toggle(isOn: $muteMentions) {
+                            Text("Also mute @mentions")
+                                .foregroundStyle(Color.yaplyPrimary)
+                        }
+                        .tint(Color.yaplyAccent)
+                        .disabled(isBusy)
+                        .onChange(of: muteMentions) { _, on in
+                            guard muteStateLoaded else { return }
+                            Task { await setMuteMentions(on) }
+                        }
+                    }
+                } header: {
+                    Text("Settings")
+                } footer: {
+                    if !isDirect, isMuted {
+                        Text(muteMentions ? "Nothing from this group will notify you." : "@mentions still notify you.")
                     }
                 }
 
@@ -399,11 +420,20 @@ struct GroupInfoView: View {
     private func loadMuteState() async {
         struct MuteRow: Decodable {
             let mutedUntil: Date?
-            enum CodingKeys: String, CodingKey { case mutedUntil = "muted_until" }
+            var muteMentions: Bool = false
+            enum CodingKeys: String, CodingKey {
+                case mutedUntil = "muted_until"
+                case muteMentions = "mute_mentions"
+            }
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                mutedUntil = try c.decodeIfPresent(Date.self, forKey: .mutedUntil)
+                muteMentions = (try c.decodeIfPresent(Bool.self, forKey: .muteMentions)) ?? false
+            }
         }
         guard let row: MuteRow = try? await supabase
             .from("conversation_members")
-            .select("muted_until")
+            .select("muted_until, mute_mentions")
             .eq("conversation_id", value: conversationId.uuidString)
             .eq("user_id", value: currentUserId.uuidString)
             .single()
@@ -413,6 +443,7 @@ struct GroupInfoView: View {
         if let until = row.mutedUntil {
             isMuted = until > Date()
         }
+        muteMentions = row.muteMentions
         muteStateLoaded = true
     }
 
@@ -423,11 +454,29 @@ struct GroupInfoView: View {
             try await convRepository.muteConversation(
                 conversationId: conversationId,
                 userId: currentUserId,
-                until: on ? Self.muteForever : nil
+                until: on ? Self.muteForever : nil,
+                muteMentions: on ? muteMentions : false
             )
             await onRefresh()
         } catch {
             isMuted = !on
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func setMuteMentions(_ on: Bool) async {
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            try await convRepository.muteConversation(
+                conversationId: conversationId,
+                userId: currentUserId,
+                until: Self.muteForever,
+                muteMentions: on
+            )
+            await onRefresh()
+        } catch {
+            muteMentions = !on
             self.error = error.localizedDescription
         }
     }

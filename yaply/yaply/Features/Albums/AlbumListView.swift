@@ -1,4 +1,5 @@
 import SwiftUI
+import Kingfisher
 
 struct AlbumListView: View {
     let conversationId: UUID
@@ -137,19 +138,21 @@ struct AlbumListView: View {
 private struct AlbumRowView: View {
     let album: YaplyAlbum
 
+    @Environment(\.displayScale) private var displayScale
+
     var body: some View {
         HStack(spacing: 12) {
             Group {
                 if let urlStr = album.coverUrl, let url = URL(string: urlStr) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let img):
-                            img.resizable().scaledToFill()
-                                .frame(width: 36, height: 36)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                        default: albumPlaceholder
-                        }
-                    }
+                    KFImage(url)
+                        .downsampling(size: CGSize(width: 36 * displayScale, height: 36 * displayScale))
+                        .backgroundDecode()
+                        .placeholder { albumPlaceholder }
+                        .onFailureView { albumPlaceholder }
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 36, height: 36)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                 } else {
                     albumPlaceholder
                 }
@@ -196,6 +199,8 @@ struct AlbumGalleryView: View {
     let currentUserId: UUID
     var isCurrentUserAdmin: Bool = false
 
+    @Environment(\.displayScale) private var displayScale
+
     @State private var media: [YaplyAlbumMedia] = []
     @State private var events: [YaplyEvent] = []
     @State private var isLoading = true
@@ -227,16 +232,16 @@ struct AlbumGalleryView: View {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 2) {
                         ForEach(media) { item in
-                            AsyncImage(url: URL(string: item.mediaUrl)) { phase in
-                                switch phase {
-                                case .success(let img):
-                                    img.resizable().scaledToFill()
-                                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 110, maxHeight: 110)
-                                        .clipped()
-                                default:
-                                    Color.yaplyCard.frame(height: 110)
-                                }
-                            }
+                            KFImage(URL(string: item.mediaUrl))
+                                .downsampling(size: CGSize(width: 200 * displayScale, height: 110 * displayScale))
+                                .backgroundDecode()
+                                .cacheOriginalImage()
+                                .placeholder { Color.yaplyCard.frame(height: 110) }
+                                .onFailureView { Color.yaplyCard.frame(height: 110) }
+                                .resizable()
+                                .scaledToFill()
+                                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 110, maxHeight: 110)
+                                .clipped()
                         }
                     }
                     .padding(.top, 2)

@@ -57,10 +57,8 @@ struct MediaPickerView: View {
                             guard let item else { return }
                             Task {
                                 if let data = try? await item.loadTransferable(type: Data.self),
-                                   let original = UIImage(data: data) {
-                                    let resized = original.resized(maxDimension: 1280)
-                                    let compressed = resized.jpegData(compressionQuality: 0.82) ?? data
-                                    onImageSelected?(compressed, "image/jpeg")
+                                   let photo = await MediaEncoding.photoJPEG(from: data) {
+                                    onImageSelected?(photo.data, "image/jpeg")
                                     dismiss()
                                 }
                             }

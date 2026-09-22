@@ -147,6 +147,11 @@ struct SendMessageWithEnvelopesParams: Encodable {
     let pThreadId: UUID?
     let pMediaUrl: String?
     let pMediaMime: String?
+    // Group-chat-only @mention targeting, plaintext beside the encrypted
+    // content — the server needs it to fan out mention-aware push/badge
+    // notifications since it never sees decrypted text. See ../CLAUDE.md.
+    var pMentionedUserIds: [UUID] = []
+    var pMentionsEveryone: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case pConversationId = "p_conversation_id"
@@ -158,5 +163,7 @@ struct SendMessageWithEnvelopesParams: Encodable {
         case pThreadId       = "p_thread_id"
         case pMediaUrl       = "p_media_url"
         case pMediaMime      = "p_media_mime"
+        case pMentionedUserIds = "p_mentioned_user_ids"
+        case pMentionsEveryone = "p_mentions_everyone"
     }
 }

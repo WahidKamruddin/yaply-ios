@@ -1,4 +1,5 @@
 import SwiftUI
+import Kingfisher
 
 struct ConversationRowView: View {
     let item: ConversationListItem
@@ -7,6 +8,13 @@ struct ConversationRowView: View {
     private var displayName: String { item.displayName(currentUserId: currentUserId) }
     private var other: MemberSummary? { item.otherMember(currentUserId: currentUserId) }
     private var isOnline: Bool { !item.isGroup && (other?.profile.effectiveOnline ?? false) }
+
+    // Mirrors the server's push_targets_for_message badge rule: a muted chat
+    // still surfaces its unread @mentions unless "mute everything" is also on.
+    private var displayUnreadCount: Int {
+        item.isMuted ? (item.muteMentions ? 0 : item.mentionUnreadCount) : item.unreadCount
+    }
+    private var isMentionOnlyBadge: Bool { item.isMuted && displayUnreadCount > 0 }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -38,17 +46,17 @@ struct ConversationRowView: View {
                 HStack {
                     Text(item.lastMessage.map { $0.previewText } ?? "No messages yet")
                         .font(.subheadline)
-                        .foregroundStyle(item.unreadCount > 0 ? Color.yaplyPrimary : Color.yaplySecondary)
-                        .fontWeight(item.unreadCount > 0 ? .medium : .regular)
+                        .foregroundStyle(displayUnreadCount > 0 ? Color.yaplyPrimary : Color.yaplySecondary)
+                        .fontWeight(displayUnreadCount > 0 ? .medium : .regular)
                         .lineLimit(1)
                     Spacer()
-                    if item.unreadCount > 0 {
-                        Text(item.unreadCount > 99 ? "99+" : "\(item.unreadCount)")
+                    if displayUnreadCount > 0 {
+                        Text(isMentionOnlyBadge ? "@" : (displayUnreadCount > 99 ? "99+" : "\(displayUnreadCount)"))
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 5)
                             .frame(minWidth: 18, minHeight: 18)
-                            .background(Color.yaplyAccent)
+                            .background(isMentionOnlyBadge ? Color.yaplyAccent.opacity(0.7) : Color.yaplyAccent)
                             .clipShape(Capsule())
                     }
                     if item.isMuted {
@@ -87,20 +95,24 @@ struct AvatarView: View {
     let name: String
     let size: CGFloat
 
+    @Environment(\.displayScale) private var displayScale
+
     var body: some View {
         if let url, let imageUrl = URL(string: url) {
-            AsyncImage(url: imageUrl) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().scaledToFill()
-                case .empty:
-                    placeholderAvatar
-                default:
-                    fallbackAvatar
-                }
-            }
-            .frame(width: size, height: size)
-            .clipShape(Circle())
+            // Kingfisher rather than AsyncImage: AsyncImage has no cache of its
+            // own, so every recycle of a message row or conversation row
+            // re-downloaded and re-decoded the avatar on the render thread --
+            // at full resolution, into a 28pt circle. Downsampling to the
+            // circle's pixel size is the whole point of the swap.
+            KFImage(imageUrl)
+                .downsampling(size: CGSize(width: size * displayScale, height: size * displayScale))
+                .backgroundDecode()
+                .placeholder { placeholderAvatar }
+                .onFailureView { fallbackAvatar }
+                .resizable()
+                .scaledToFill()
+                .frame(width: size, height: size)
+                .clipShape(Circle())
         } else {
             fallbackAvatar
         }

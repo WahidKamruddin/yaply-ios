@@ -168,12 +168,10 @@ struct AccountSettingsView: View {
                     guard let item else { return }
                     Task {
                         if let data = try? await item.loadTransferable(type: Data.self),
-                           let original = UIImage(data: data) {
-                            let resized = original.resized(maxDimension: 512)
-                            let compressed = resized.jpegData(compressionQuality: 0.8) ?? data
-                            avatarData = compressed
+                           let avatar = await MediaEncoding.avatarJPEG(from: data) {
+                            avatarData = avatar.data
                             avatarMime = "image/jpeg"
-                            avatarPreview = resized
+                            avatarPreview = avatar.image
                         }
                     }
                 }

@@ -7,12 +7,14 @@ final class ConversationRepository {
         struct MembershipRow: Decodable {
             let lastReadAt: Date?
             let mutedUntil: Date?
+            let muteMentions: Bool
             let requestState: String
             let conversations: ConvNested?
 
             enum CodingKeys: String, CodingKey {
                 case lastReadAt = "last_read_at"
                 case mutedUntil = "muted_until"
+                case muteMentions = "mute_mentions"
                 case requestState = "request_state"
                 case conversations
             }
@@ -53,6 +55,7 @@ final class ConversationRepository {
             .select("""
                 last_read_at,
                 muted_until,
+                mute_mentions,
                 request_state,
                 conversations(
                     id,
@@ -84,6 +87,8 @@ final class ConversationRepository {
             let type: String
             let deletedAt: Date?
             let createdAt: Date
+            var mentionedUserIds: [UUID] = []
+            var mentionsEveryone: Bool = false
 
             enum CodingKeys: String, CodingKey {
                 case id
@@ -92,6 +97,22 @@ final class ConversationRepository {
                 case content, iv, type
                 case deletedAt = "deleted_at"
                 case createdAt = "created_at"
+                case mentionedUserIds = "mentioned_user_ids"
+                case mentionsEveryone = "mentions_everyone"
+            }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                id = try c.decode(UUID.self, forKey: .id)
+                conversationId = try c.decode(UUID.self, forKey: .conversationId)
+                senderId = try c.decodeIfPresent(UUID.self, forKey: .senderId)
+                content = try c.decode(String.self, forKey: .content)
+                iv = try c.decodeIfPresent(String.self, forKey: .iv)
+                type = try c.decode(String.self, forKey: .type)
+                deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
+                createdAt = try c.decode(Date.self, forKey: .createdAt)
+                mentionedUserIds = (try c.decodeIfPresent([UUID].self, forKey: .mentionedUserIds)) ?? []
+                mentionsEveryone = (try c.decodeIfPresent(Bool.self, forKey: .mentionsEveryone)) ?? false
             }
         }
 
@@ -105,11 +126,12 @@ final class ConversationRepository {
 
         var lastMessages: [UUID: DecryptedMessage] = [:]
         var unreadCounts: [UUID: Int] = [:]
+        var mentionUnreadCounts: [UUID: Int] = [:]
 
         if !convIds.isEmpty {
             let msgs: [LastMsgRow] = try await supabase
                 .from("messages")
-                .select("id, conversation_id, sender_id, content, iv, type, deleted_at, created_at")
+                .select("id, conversation_id, sender_id, content, iv, type, deleted_at, created_at, mentioned_user_ids, mentions_everyone")
                 .in("conversation_id", values: convIds)
                 .is("deleted_at", value: nil)
                 .order("created_at", ascending: false)
@@ -142,6 +164,12 @@ final class ConversationRepository {
                     let lastRead = myLastReadAt[m.conversationId]
                     if lastRead == nil || m.createdAt > lastRead! {
                         unreadCounts[m.conversationId, default: 0] += 1
+                        // Mirrors push_targets_for_message's badge subquery: a
+                        // mention counts separately so it can surface through a
+                        // "mute chat" (not "mute everything") conversation.
+                        if m.mentionsEveryone || m.mentionedUserIds.contains(userId) {
+                            mentionUnreadCounts[m.conversationId, default: 0] += 1
+                        }
                     }
                 }
             }
@@ -163,6 +191,7 @@ final class ConversationRepository {
 
             let lastMsg = lastMessages[conv.id]
             let unreadCount = unreadCounts[conv.id] ?? 0
+            let mentionUnreadCount = mentionUnreadCounts[conv.id] ?? 0
             let mutedUntil = row.mutedUntil
             let isMuted = mutedUntil.map { $0 > Date() } ?? false
             return ConversationListItem(
@@ -176,7 +205,9 @@ final class ConversationRepository {
                 isMuted: isMuted,
                 mutedUntil: mutedUntil,
                 updatedAt: conv.updatedAt,
-                requestState: row.requestState
+                requestState: row.requestState,
+                mentionUnreadCount: mentionUnreadCount,
+                muteMentions: row.muteMentions
             )
         }
         .sorted {
@@ -208,12 +239,15 @@ final class ConversationRepository {
         return convId
     }
 
-    func muteConversation(conversationId: UUID, userId: UUID, until: Date?) async throws {
+    func muteConversation(conversationId: UUID, userId: UUID, until: Date?, muteMentions: Bool = false) async throws {
         // Explicit AnyJSON.null rather than an Encodable struct holding an
         // Optional: JSONEncoder omits nil Optionals, so unmuting sent an empty
         // PATCH body and silently did nothing while muting worked fine.
+        // Unmuting always resets mute_mentions too — it's meaningless while
+        // muted_until is nil.
         let payload: [String: AnyJSON] = [
-            "muted_until": until.map { .string($0.iso8601) } ?? .null
+            "muted_until": until.map { .string($0.iso8601) } ?? .null,
+            "mute_mentions": .bool(until == nil ? false : muteMentions)
         ]
         try await supabase
             .from("conversation_members")

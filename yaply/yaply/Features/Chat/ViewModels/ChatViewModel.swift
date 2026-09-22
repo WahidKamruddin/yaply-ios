@@ -3,12 +3,36 @@ import CryptoKit
 import Foundation
 import Realtime
 import SwiftUI
+import Kingfisher
 
 @Observable
 @MainActor
 final class ChatViewModel {
-    private(set) var messages: [DecryptedMessage] = []
+    private(set) var messages: [DecryptedMessage] = [] {
+        didSet { rebuildLayout() }
+    }
+
+    /// Date separators, bubble positions, reply index, thread counts and the
+    /// last-own-message id, all derived from `messages`.
+    ///
+    /// Rebuilt here -- once per mutation -- rather than inside `ChatView.body`,
+    /// where it was being recomputed on every scroll frame and cost O(n^2)
+    /// because the reply lookup and thread counts were per-row linear scans.
+    private(set) var layout = MessageListLayout()
+
+    private func rebuildLayout() {
+        layout = MessageListLayout.build(
+            messages,
+            isGroupConversation: isGroupConversation,
+            currentUserId: currentUserId
+        )
+    }
+
+    /// O(1) reply lookup, replacing `messages.first { $0.id == rid }` per row.
+    func message(id: UUID) -> DecryptedMessage? { layout.messagesById[id] }
     private(set) var isLoading = false
+    /// In-flight guard for `loadOlderMessages` — see the note there.
+    private var isLoadingOlder = false
     private(set) var isSending = false
     var error: String?
     var replyToMessage: DecryptedMessage?
@@ -25,7 +49,12 @@ final class ChatViewModel {
 
     // Group info
     private(set) var conversationMembers: [MemberSummary] = []
-    private(set) var isGroupConversation = false
+    // `loadConversationInfo` can resolve this after the first page of messages
+    // has already landed, and it decides whether new-speaker spacing applies —
+    // so the derived layout has to be rebuilt when it flips.
+    private(set) var isGroupConversation = false {
+        didSet { if oldValue != isGroupConversation { rebuildLayout() } }
+    }
     private(set) var groupName: String?
 
     // My own conversation_members.request_state — 'accepted' unless this is a
@@ -103,7 +132,13 @@ final class ChatViewModel {
     }
 
     func loadOlderMessages() async {
-        guard hasMore, let cursor = nextCursor else { return }
+        // The pagination spinner sits at the head of a LazyVStack, so its
+        // `.onAppear` can fire again while the previous page is still in
+        // flight -- `nextCursor` isn't advanced until the fetch returns, so
+        // without this guard the same page gets prepended twice.
+        guard hasMore, !isLoadingOlder, let cursor = nextCursor else { return }
+        isLoadingOlder = true
+        defer { isLoadingOlder = false }
         do {
             let (raw, newCursor) = try await repository.fetchMessages(conversationId: conversationId, cursor: cursor)
             nextCursor = newCursor
@@ -250,6 +285,18 @@ final class ChatViewModel {
         ))
         replyToMessage = nil
 
+        // Extracted from plaintext before encryption — mention targeting is the
+        // one piece of this send that travels unencrypted, since the server
+        // needs it to fan out push/badge notifications. DMs never carry
+        // mentions. See ../CLAUDE.md's mentions section.
+        let mentions: (mentionedUserIds: [UUID], mentionsEveryone: Bool) = isGroupConversation
+            ? Mentions.extractMentions(
+                text: text,
+                members: conversationMembers.map { Mentions.Candidate(userId: $0.userId, username: $0.profile.username) },
+                senderId: currentUserId
+            )
+            : ([], false)
+
         do {
             // Registration is single-flight — safe to call even if already done.
             try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
@@ -262,7 +309,8 @@ final class ChatViewModel {
                     pConversationId: conversationId, pContent: sealed.content, pIv: sealed.iv,
                     pEnvelopes: sealed.envelopes, pType: "text",
                     pReplyToId: capturedReplyTo?.id, pThreadId: capturedReplyTo?.threadId,
-                    pMediaUrl: nil, pMediaMime: nil
+                    pMediaUrl: nil, pMediaMime: nil,
+                    pMentionedUserIds: mentions.mentionedUserIds, pMentionsEveryone: mentions.mentionsEveryone
                 )
                 sent = try await repository.sendMessageWithEnvelopes(params)
             } else {
@@ -270,7 +318,8 @@ final class ChatViewModel {
                 let params = SendMessageParams(
                     conversationId: conversationId, senderId: currentUserId,
                     content: Data(text.utf8).base64EncodedString(), iv: nil, type: "text",
-                    replyToId: capturedReplyTo?.id, threadId: capturedReplyTo?.threadId
+                    replyToId: capturedReplyTo?.id, threadId: capturedReplyTo?.threadId,
+                    mentionedUserIds: mentions.mentionedUserIds, mentionsEveryone: mentions.mentionsEveryone
                 )
                 sent = try await repository.sendMessage(params)
             }
@@ -307,11 +356,20 @@ final class ChatViewModel {
 
     // MARK: - Send media
 
-    func sendImageMessage(imageData: Data, mimeType: String) async {
+    /// `pixelSize` is the size actually encoded, stamped onto the URL as an
+    /// `#ar=` fragment so the receiving bubble can reserve the right height
+    /// before the image has downloaded. Inert for Storage; ignored by clients
+    /// that don't read it.
+    func sendImageMessage(imageData: Data, mimeType: String, pixelSize: CGSize = .zero) async {
         isSending = true
         defer { isSending = false }
         do {
-            let url = try await uploadService.uploadImage(imageData, mimeType: mimeType, userId: currentUserId)
+            let uploaded = try await uploadService.uploadImage(imageData, mimeType: mimeType, userId: currentUserId)
+            let url = MediaAspectRatio.annotate(uploaded, pixelSize: pixelSize)
+            // We just encoded these exact bytes; without this the bubble turns
+            // straight around and downloads them back from Storage to draw the
+            // message the sender is already looking at.
+            Self.seedImageCache(imageData, forKey: url)
             let params = SendMessageParams(
                 conversationId: conversationId, senderId: currentUserId,
                 content: "", iv: nil, type: "image", mediaUrl: url, mediaMime: mimeType
@@ -324,6 +382,23 @@ final class ChatViewModel {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    /// Puts freshly uploaded bytes into Kingfisher's cache under the URL the
+    /// bubble will ask for, so a just-sent image renders from memory instead of
+    /// making a round-trip for something we already have.
+    ///
+    /// Stored as the *original*: the bubble applies a downsampling processor, and
+    /// Kingfisher will derive the processed variant from a cached original
+    /// without hitting the network.
+    private static func seedImageCache(_ data: Data, forKey key: String) {
+        guard let image = KFCrossPlatformImage(data: data) else { return }
+        ImageCache.default.store(
+            image,
+            original: data,
+            forKey: key,
+            toDisk: true
+        )
     }
 
     func sendGifMessage(url: String) async {
@@ -359,11 +434,11 @@ final class ChatViewModel {
     /// and sent unencrypted (`content: ""`, `iv: nil`, `type: "sticker"`) — same
     /// path as image/gif, never the envelope RPC.
     func sendStickerMessage(image: UIImage) async {
-        let normalized = image.resized(maxDimension: 512)
-        guard let png = normalized.pngData() else {
+        guard let sticker = await MediaEncoding.stickerPNG(image) else {
             self.error = "Couldn't read that sticker."
             return
         }
+        let png = sticker.data
 
         let tempId = UUID()
         messages.append(DecryptedMessage(
@@ -473,37 +548,38 @@ final class ChatViewModel {
 
     // MARK: - Reactions
 
-    /// The single emoji this user currently has on a message, if any.
-    func myReaction(for messageId: UUID) -> String? {
-        reactionsMap[messageId]?.first(where: { $0.reactedByMe })?.emoji
+    /// Every emoji this user currently has on a message. A user may hold several
+    /// simultaneous reactions on one message — matches web, where the schema
+    /// (`message_reactions` PK `(message_id, user_id, emoji)`) already allows it.
+    func myReactions(for messageId: UUID) -> Set<String> {
+        Set((reactionsMap[messageId] ?? []).filter(\.reactedByMe).map(\.emoji))
     }
 
-    /// One reaction per user (Messenger / Instagram): picking `emoji` replaces any
-    /// existing reaction; picking the one already set removes it.
-    func setReaction(messageId: UUID, emoji: String) {
-        let groups = reactionsMap[messageId] ?? []
-        let mine = groups.first(where: { $0.reactedByMe })?.emoji
-        let clearing = (mine == emoji)
+    /// Toggles a single emoji for this user, independent of any other reaction
+    /// they already hold on the message.
+    func toggleReaction(messageId: UUID, emoji: String) {
+        var groups = reactionsMap[messageId] ?? []
+        let alreadyReacted = groups.contains { $0.emoji == emoji && $0.reactedByMe }
 
-        // Optimistic: drop my current reaction, then add the new one unless toggling off.
-        var updated = groups.compactMap { g -> ReactionGroup? in
-            guard g.reactedByMe else { return g }
-            let c = g.count - 1
-            return c > 0 ? ReactionGroup(emoji: g.emoji, count: c, reactedByMe: false) : nil
-        }
-        if !clearing {
-            if let idx = updated.firstIndex(where: { $0.emoji == emoji }) {
-                updated[idx] = ReactionGroup(emoji: emoji, count: updated[idx].count + 1, reactedByMe: true)
+        // Optimistic update of just this emoji's group; every other group is untouched.
+        if let idx = groups.firstIndex(where: { $0.emoji == emoji }) {
+            let g = groups[idx]
+            let count = alreadyReacted ? g.count - 1 : g.count + 1
+            if count <= 0 {
+                groups.remove(at: idx)
             } else {
-                updated.append(ReactionGroup(emoji: emoji, count: 1, reactedByMe: true))
+                groups[idx] = ReactionGroup(emoji: emoji, count: count, reactedByMe: !alreadyReacted)
             }
+        } else {
+            groups.append(ReactionGroup(emoji: emoji, count: 1, reactedByMe: true))
         }
-        reactionsMap[messageId] = updated
+        reactionsMap[messageId] = groups
 
         Task {
             do {
-                try await repository.removeAllReactions(messageId: messageId, userId: currentUserId)
-                if !clearing {
+                if alreadyReacted {
+                    try await repository.removeReaction(messageId: messageId, userId: currentUserId, emoji: emoji)
+                } else {
                     try await repository.addReaction(messageId: messageId, userId: currentUserId, emoji: emoji)
                 }
             } catch {
@@ -614,11 +690,39 @@ final class ChatViewModel {
                         await self.handleMessageUpdate(event.record)
                     }
                 }
-                group.addTask { for await _ in reactionInserts { await self.loadReactionsForCurrentMessages() } }
-                group.addTask { for await _ in reactionDeletes { await self.loadReactionsForCurrentMessages() } }
+                // `message_reactions` and `message_reads` have no
+                // conversation_id, so these subscriptions cannot be filtered
+                // server-side -- every reaction and every read receipt in the
+                // entire database arrives here. Each one used to trigger a full
+                // refetch for every loaded message id. Gate on whether the row
+                // even refers to a message this conversation has loaded.
+                group.addTask {
+                    for await event in reactionInserts
+                    where await self.isLoadedMessage(event.record) {
+                        await self.loadReactionsForCurrentMessages()
+                    }
+                }
+                group.addTask {
+                    for await event in reactionDeletes
+                    where await self.isLoadedMessage(event.oldRecord) {
+                        await self.loadReactionsForCurrentMessages()
+                    }
+                }
                 group.addTask { for await _ in pinInserts { await self.loadPins() } }
-                group.addTask { for await _ in pinDeletes { await self.loadPins() } }
-                group.addTask { for await _ in readInserts { await self.fetchReadStatus() } }
+                group.addTask {
+                    // Delete events carry only the primary key, which for
+                    // pinned_messages includes conversation_id.
+                    for await event in pinDeletes
+                    where event.oldRecord["conversation_id"]?.stringValue == self.conversationId.uuidString {
+                        await self.loadPins()
+                    }
+                }
+                group.addTask {
+                    for await event in readInserts
+                    where await self.isLoadedMessage(event.record) {
+                        await self.fetchReadStatus()
+                    }
+                }
                 group.addTask { for await event in profileUpdates { await self.handleProfileUpdate(event.record) } }
                 group.addTask { await self.runTypingChannel() }
             }
@@ -825,6 +929,16 @@ final class ChatViewModel {
 
     // Keeps the in-chat "Online"/"Offline" header live — patches just the changed
     // member's profile in place rather than re-fetching the whole conversation.
+    /// True when a realtime row refers to a message currently loaded here.
+    /// O(1) against the reply index the layout already maintains.
+    private func isLoadedMessage(_ record: [String: AnyJSON]) -> Bool {
+        guard
+            let raw = record["message_id"]?.stringValue,
+            let id = UUID(uuidString: raw)
+        else { return false }
+        return layout.messagesById[id] != nil
+    }
+
     private func handleProfileUpdate(_ record: [String: AnyJSON]) async {
         guard
             let idStr = record["id"]?.stringValue, let id = UUID(uuidString: idStr),
@@ -860,10 +974,35 @@ final class ChatViewModel {
 
     // MARK: - Encryption helpers (v2 — branches on enc_v first, then iv)
 
+    /// Decrypts a page in two phases: one batched envelope query, then a pure
+    /// in-memory unwrap per message.
+    ///
+    /// This used to be a strictly sequential loop where every message awaited
+    /// its own `message_envelopes` round-trip and re-read the Keychain, so a
+    /// 50-message page cost 50 serial network calls and ~100 Keychain reads
+    /// before anything rendered.
     private func decryptAll(_ raw: [DbMessage]) async -> [DecryptedMessage] {
+        let ordered = raw.reversed().map { $0 }
+
+        // Registration is single-flight, and the candidate fingerprints it
+        // produces are the same for every message — so both belong outside the
+        // loop. Still awaited BEFORE any failure is declared, so a device that
+        // hasn't finished registering isn't wrongly reported as undecryptable.
+        let v2 = ordered.filter { $0.encV == 2 && $0.iv != nil }
+        var envelopes: [UUID: MessageEnvelope] = [:]
+        if !v2.isEmpty {
+            try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
+            let candidates = KeyStore.candidateFingerprints(forUser: currentUserId)
+            envelopes = (try? await repository.fetchEnvelopes(
+                messageIds: v2.map(\.id),
+                candidateFps: candidates
+            )) ?? [:]
+        }
+
         var result: [DecryptedMessage] = []
-        for msg in raw.reversed() {
-            let (content, failed) = await decryptDbMessage(msg)
+        result.reserveCapacity(ordered.count)
+        for msg in ordered {
+            let (content, failed) = decryptDbMessage(msg, envelope: envelopes[msg.id])
             result.append(DecryptedMessage(
                 id: msg.id, conversationId: msg.conversationId, senderId: msg.senderId,
                 content: content, type: msg.type, mediaUrl: msg.mediaUrl,
@@ -873,6 +1012,26 @@ final class ChatViewModel {
             ))
         }
         return result
+    }
+
+    // Batch form of `decryptDbMessage`, against an already-fetched envelope.
+    // Same branch order and same failure semantics; no envelope for an enc_v=2
+    // message is a permanent, honest failure, never a fall-through.
+    private func decryptDbMessage(
+        _ msg: DbMessage,
+        envelope: MessageEnvelope?
+    ) -> (content: String, failed: Bool) {
+        if msg.encV == 2 {
+            guard let iv = msg.iv, let envelope else { return ("", true) }
+            guard let plaintext = EnvelopeEncryption.open(
+                envelope: envelope, content: msg.content, iv: iv, userId: currentUserId
+            ) else { return ("", true) }
+            return (plaintext, false)
+        } else if msg.encV == nil && msg.iv == nil {
+            return (EncryptionService.decryptLegacy(msg.content) ?? msg.content, false)
+        } else {
+            return ("", true)
+        }
     }
 
     // enc_v == 2 → envelope path; no envelope for this device ⇒ permanent, honest
