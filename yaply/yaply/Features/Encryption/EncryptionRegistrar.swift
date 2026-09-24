@@ -14,20 +14,45 @@ import PostgREST
 actor EncryptionRegistrar {
     static let shared = EncryptionRegistrar()
 
-    private var inFlight: [UUID: Task<Void, Error>] = [:]
+    private var inFlight: [UUID: Task<Int, Error>] = [:]
+
+    /// The device id each user last registered successfully, and when. Every send,
+    /// every incoming message and every page decrypt calls `ensureEncryptionKeys`;
+    /// without this each call re-ran the orphan-check SELECT and the `devices`
+    /// UPSERT — two round-trips in front of every message in both directions.
+    private var registered: [UUID: (deviceId: Int, at: ContinuousClock.Instant)] = [:]
+
+    /// How long a successful registration is trusted before the next call redoes
+    /// it. Keeps `last_active_at` well inside the 90-day fan-out window and re-runs
+    /// the orphan check periodically; live revocation is DeviceRevocationWatcher's
+    /// job, not this one's.
+    private static let refreshInterval: Duration = .seconds(30 * 60)
 
     func ensureEncryptionKeys(userId: UUID) async throws {
+        // Trust the memo only while the Keychain still holds the same device id —
+        // sign-out and revocation both go through KeyStore.clearAllKeys, which
+        // removes it, so a wiped install always re-registers.
+        if let memo = registered[userId],
+           ContinuousClock.now - memo.at < Self.refreshInterval,
+           (try? KeyStore.loadDeviceId(forUser: userId)) == memo.deviceId {
+            return
+        }
         if let existing = inFlight[userId] {
-            try await existing.value
+            _ = try await existing.value
             return
         }
         let task = Task { try await Self.register(userId: userId) }
         inFlight[userId] = task
         defer { inFlight[userId] = nil }
-        try await task.value
+        let deviceId = try await task.value
+        registered[userId] = (deviceId, .now)
+        // Our own row may be new or re-keyed; a device list cached before this
+        // would leave this install out of its own sends' envelopes.
+        await DeviceListCache.invalidate(userId: userId)
     }
 
-    private static func register(userId: UUID) async throws {
+    /// Returns the registered device id.
+    private static func register(userId: UUID) async throws -> Int {
         var storedDeviceId = try KeyStore.loadDeviceId(forUser: userId)
 
         // Orphan check — MANDATORY. A locally stored device_id with no matching
@@ -80,6 +105,7 @@ actor EncryptionRegistrar {
             .from("devices")
             .upsert(params, onConflict: "user_id,device_id")
             .execute()
+        return deviceId
     }
 
     // True only when the query SUCCEEDS and returns nothing. Any thrown error

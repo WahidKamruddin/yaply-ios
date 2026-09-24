@@ -652,9 +652,9 @@ struct ChatView: View {
     }
 
     /// Opens the item an item-created pill points at. Tasks and reminders
-    /// have no detail view, so they open the panel tab; plans/events and
-    /// albums push their own page; notes/budgets open in the panel. A deleted
-    /// item falls back to its tab.
+    /// have no detail view, so they open the panel tab; plans/events, albums
+    /// and budgets push their own page; notes open in the panel. A deleted
+    /// item falls back to its tab (a budget shows its own "deleted" state).
     private func openItem(_ item: SystemItem) async {
         if item.kind.opensInPanelOnly {
             openPanel(item.kind.tab)
@@ -674,7 +674,11 @@ struct ChatView: View {
                 router.push(.albumDetail(album: album, isCurrentUserAdmin: isAdmin))
                 return
             }
-        case .note, .budget:
+        case .budget:
+            // The detail page loads by id and shows "deleted" itself if gone.
+            router.push(.budgetDetail(budgetId: item.id, conversationId: conversationId, members: vm.conversationMembers))
+            return
+        case .note:
             router.push(.conversationPanel(
                 conversationId: conversationId,
                 members: vm.conversationMembers,

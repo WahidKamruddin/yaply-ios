@@ -13,6 +13,7 @@ final class MessageRepository {
                 sender_id,
                 content,
                 iv,
+                enc_v,
                 type,
                 media_url,
                 media_mime,
@@ -55,6 +56,7 @@ final class MessageRepository {
                 sender_id,
                 content,
                 iv,
+                enc_v,
                 type,
                 media_url,
                 media_mime,
@@ -132,37 +134,19 @@ final class MessageRepository {
         }
     }
 
-    // Unfiltered by last_active_at — used ONLY to decide the phase-1 fallback
-    // (does this member have any registered device at all, ever). Must NOT be used
-    // to pick which devices receive envelopes; a member with a merely stale device
-    // should have that device excluded from the send, not trigger a fallback for
-    // the whole message.
-    func fetchUserIdsWithAnyDevice(userIds: [UUID]) async throws -> Set<UUID> {
+    // Every registered device of every given user, active or not — read through
+    // `DeviceListCache`, never directly by the send path. One query answers both
+    // "does this member have any device at all" (the phase-1 fallback, which must
+    // ignore last_active_at so a merely stale device doesn't downgrade the whole
+    // message) and, filtered to the 90-day window, "which devices get an envelope".
+    // Callers must union the sender's id into `userIds` themselves so their own
+    // other devices can read their sent message.
+    func fetchDeviceRows(userIds: [UUID]) async throws -> [DeviceRow] {
         guard !userIds.isEmpty else { return [] }
-        struct Row: Decodable {
-            let userId: UUID
-            enum CodingKeys: String, CodingKey { case userId = "user_id" }
-        }
-        let rows: [Row] = try await supabase
-            .from("devices")
-            .select("user_id")
-            .in("user_id", values: userIds.map(\.uuidString))
-            .execute()
-            .value
-        return Set(rows.map(\.userId))
-    }
-
-    // Every active device (last_active_at within 90 days) of every given user,
-    // including the sender's own — callers must union the sender's id into
-    // `userIds` themselves so their own other devices can read their sent message.
-    func fetchActiveDeviceRows(userIds: [UUID]) async throws -> [DeviceRow] {
-        guard !userIds.isEmpty else { return [] }
-        let cutoff = Date().addingTimeInterval(-90 * 24 * 60 * 60).iso8601
         return try await supabase
             .from("devices")
             .select("user_id, device_id, identity_key, key_fingerprint, last_active_at")
             .in("user_id", values: userIds.map(\.uuidString))
-            .gt("last_active_at", value: cutoff)
             .execute()
             .value
     }
@@ -267,6 +251,7 @@ final class MessageRepository {
                 sender_id,
                 content,
                 iv,
+                enc_v,
                 type,
                 media_url,
                 media_mime,

@@ -139,6 +139,13 @@ struct ContentView: View {
                 currentUserId: userId,
                 isCurrentUserAdmin: isAdmin
             )
+        case .budgetDetail(let budgetId, let convId, let members):
+            BudgetDetailView(
+                budgetId: budgetId,
+                conversationId: convId,
+                currentUserId: userId,
+                members: members
+            )
         case .settings:
             SettingsView()
         case .settingsDetail(let tab):

@@ -3,115 +3,118 @@ import SwiftUI
 struct BudgetListView: View {
     let conversationId: UUID
     let currentUserId: UUID
+    var members: [MemberSummary] = []
     var isCurrentUserAdmin: Bool = false
-    /// Set when opened from an item-created pill: that budget is scrolled
-    /// into view and briefly outlined (iOS has no budget detail page).
+    /// Set when opened from Home: that budget's detail page is pushed once
+    /// the list has loaded.
     var focusItemId: UUID? = nil
 
+    @Environment(AppRouter.self) private var router
     @State private var budgets: [YaplyBudget] = []
-    @State private var didApplyFocus = false
-    @State private var highlightedId: UUID?
+    @State private var overviews: [UUID: BudgetOverview] = [:]
+    @State private var eventNames: [UUID: String] = [:]
     @State private var events: [YaplyEvent] = []
+    @State private var didApplyFocus = false
     @State private var isLoading = false
     @State private var showCreate = false
     @State private var budgetToDelete: YaplyBudget?
     @State private var budgetToLink: YaplyBudget?
     @State private var newName = ""
-    @State private var newAmount = ""
+    @State private var newCap = ""
     @State private var newCurrency = "USD"
+    @State private var createError: String?
 
     private let repo = BudgetRepository()
     private let eventRepo = EventRepository()
+
+    /// Blank = no cap; otherwise it must parse.
+    private var newCapCents: Int?? {
+        let t = newCap.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty { return .some(nil) }
+        return BudgetMoney.parseCents(t).map { .some($0) }
+    }
 
     var body: some View {
         ZStack {
             Color.yaplyBackground.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                if isLoading {
+                if isLoading && budgets.isEmpty {
                     Spacer()
                     ProgressView().tint(Color.yaplyAccent)
                     Spacer()
                 } else if budgets.isEmpty {
                     Spacer()
-                    EmptyStateView(icon: "dollarsign.circle", title: "No budgets yet")
+                    EmptyStateView(icon: "dollarsign.circle", title: "No budgets yet", actionLabel: "New budget") {
+                        showCreate = true
+                    }
                     Spacer()
                 } else {
-                    ScrollViewReader { proxy in
                     List {
                         ForEach(budgets) { budget in
-                            BudgetRowView(budget: budget, events: events)
-                                .yaplyCardStyle()
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .stroke(Color.yaplyAccent, lineWidth: highlightedId == budget.id ? 2 : 0)
+                            Button {
+                                open(budget)
+                            } label: {
+                                BudgetRowView(
+                                    budget: budget,
+                                    overview: overviews[budget.id],
+                                    linkedEventName: budget.eventId.flatMap { eventNames[$0] }
                                 )
-                                .yaplyCardRowContainer()
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    let canDelete = budget.createdBy == currentUserId || isCurrentUserAdmin
-                                    let effectiveCanDelete = canDelete && (!budget.locked || isCurrentUserAdmin)
-                                    Button(role: effectiveCanDelete ? .destructive : .none) {
-                                        if effectiveCanDelete { budgetToDelete = budget }
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                    .tint(effectiveCanDelete ? Color.yaplyDanger : Color(UIColor.systemGray4))
-
-                                    // Link/Unlink are member-mutating actions on a shared
-                                    // budget — gate them the same as Delete, not left open
-                                    // to any member (RLS silently rejects non-creator/admin
-                                    // updates, which previously failed with no feedback).
-                                    if canDelete {
-                                        if budget.eventId != nil {
-                                            Button {
-                                                Task {
-                                                    try? await repo.unlinkFromEvent(budgetId: budget.id)
-                                                    await load()
-                                                }
-                                            } label: {
-                                                Label("Unlink", systemImage: "link.badge.minus")
-                                            }
-                                            .tint(.orange)
-                                        } else {
-                                            Button {
-                                                budgetToLink = budget
-                                            } label: {
-                                                Label("Link Event", systemImage: "link")
-                                            }
-                                            .tint(Color.yaplyAccent)
-                                        }
-                                    }
+                            }
+                            .buttonStyle(.plain)
+                            .yaplyCardStyle()
+                            .yaplyCardRowContainer()
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                let canDelete = (budget.createdBy == currentUserId && !budget.locked) || isCurrentUserAdmin
+                                Button(role: canDelete ? .destructive : .none) {
+                                    if canDelete { budgetToDelete = budget }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
                                 }
-                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                    if isCurrentUserAdmin {
+                                .tint(canDelete ? Color.yaplyDanger : Color(UIColor.systemGray4))
+
+                                // Link/Unlink are gated like Delete rather than left
+                                // open to any member.
+                                if budget.createdBy == currentUserId || isCurrentUserAdmin {
+                                    if budget.eventId != nil {
                                         Button {
                                             Task {
-                                                try? await repo.setLocked(id: budget.id, locked: !budget.locked)
+                                                try? await repo.unlinkFromEvent(budgetId: budget.id)
                                                 await load()
                                             }
                                         } label: {
-                                            Label(budget.locked ? "Unlock" : "Lock",
-                                                  systemImage: budget.locked ? "lock.open" : "lock")
+                                            Label("Unlink", systemImage: "link.badge.minus")
                                         }
                                         .tint(.orange)
+                                    } else {
+                                        Button {
+                                            budgetToLink = budget
+                                        } label: {
+                                            Label("Link Event", systemImage: "link")
+                                        }
+                                        .tint(Color.yaplyAccent)
                                     }
                                 }
+                            }
+                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                if isCurrentUserAdmin {
+                                    Button {
+                                        Task {
+                                            try? await repo.setLocked(id: budget.id, locked: !budget.locked)
+                                            await load()
+                                        }
+                                    } label: {
+                                        Label(budget.locked ? "Unlock" : "Lock",
+                                              systemImage: budget.locked ? "lock.open" : "lock")
+                                    }
+                                    .tint(.orange)
+                                }
+                            }
                         }
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
-                    .onAppear {
-                        guard let focusItemId, !didApplyFocus,
-                              budgets.contains(where: { $0.id == focusItemId }) else { return }
-                        didApplyFocus = true
-                        proxy.scrollTo(focusItemId, anchor: .center)
-                        withAnimation { highlightedId = focusItemId }
-                        Task {
-                            try? await Task.sleep(for: .seconds(1.5))
-                            withAnimation { highlightedId = nil }
-                        }
-                    }
-                    }
+                    .refreshable { await load() }
                 }
             }
         }
@@ -123,8 +126,10 @@ struct BudgetListView: View {
                     Image(systemName: "plus")
                         .foregroundStyle(Color.yaplyAccent)
                 }
+                .accessibilityLabel("New budget")
             }
         }
+        // Re-runs on return from a detail page, so spent / my balance stay fresh.
         .task { await load() }
         .onReceive(NotificationCenter.default.publisher(for: .yaplyItemCreated)) { notif in
             guard (notif.userInfo?["type"] as? String) == "budgets" else { return }
@@ -149,7 +154,7 @@ struct BudgetListView: View {
         .yaplyConfirm(
             isPresented: Binding(get: { budgetToDelete != nil }, set: { if !$0 { budgetToDelete = nil } }),
             title: "Delete budget",
-            message: "\"\(budgetToDelete?.name ?? "")\" and all its expenses will be permanently deleted. This cannot be undone.",
+            message: "\"\(budgetToDelete?.name ?? "")\" and all its expenses and payments will be permanently deleted. This cannot be undone.",
             icon: "trash.fill",
             confirmLabel: "Delete"
         ) {
@@ -166,96 +171,133 @@ struct BudgetListView: View {
         YaplySheetScaffold(
             title: "New budget",
             primaryLabel: "Create",
-            primaryEnabled: !newName.isBlank && (Double(newAmount) ?? 0) > 0,
-            primaryAction: {
-                guard !newName.isBlank, let amount = Double(newAmount), amount > 0 else { return }
-                let name = newName, currency = newCurrency
-                newName = ""; newAmount = ""
-                showCreate = false
-                Task {
-                    try? await repo.createBudget(conversationId: conversationId, createdBy: currentUserId, name: name, totalAmount: amount, currency: currency)
-                    await load()
-                }
-            }
+            primaryEnabled: !newName.isBlank && newCapCents != nil,
+            primaryAction: create
         ) {
             VStack(spacing: 16) {
                 YaplyLabeledField(label: "Budget name") {
                     TextField("Trip, dinner, group gift…", text: $newName)
                         .yaplyInputStyle()
                 }
-                YaplyLabeledField(label: "Total amount") {
-                    TextField("0.00", text: $newAmount)
+                YaplyLabeledField(label: "Spending cap (optional)") {
+                    TextField("No cap", text: $newCap)
                         .keyboardType(.decimalPad)
                         .yaplyInputStyle()
                 }
                 YaplyLabeledField(label: "Currency") {
                     Picker("Currency", selection: $newCurrency) {
-                        Text("USD").tag("USD")
-                        Text("EUR").tag("EUR")
-                        Text("GBP").tag("GBP")
-                        Text("CAD").tag("CAD")
+                        ForEach(BudgetMoney.currencies, id: \.self) { Text($0).tag($0) }
                     }
                     .pickerStyle(.segmented)
                 }
+                if let createError {
+                    Text(createError)
+                        .font(.footnote)
+                        .foregroundStyle(Color.yaplyDanger)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
+    }
+
+    private func create() {
+        guard !newName.isBlank, let capCents = newCapCents else { return }
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cap = capCents.map { BudgetMoney.decimal(cents: $0) }
+        let currency = newCurrency
+        createError = nil
+        Task {
+            do {
+                _ = try await repo.createBudget(conversationId: conversationId, createdBy: currentUserId, name: name, totalAmount: cap, currency: currency)
+                newName = ""; newCap = ""
+                showCreate = false
+                await load()
+            } catch {
+                createError = friendlyBudgetError(error)
+            }
+        }
+    }
+
+    private func open(_ budget: YaplyBudget) {
+        router.push(.budgetDetail(budgetId: budget.id, conversationId: conversationId, members: members))
     }
 
     private func load() async {
         isLoading = true
         async let budgetFetch = repo.fetchBudgets(conversationId: conversationId)
-        async let eventFetch  = eventRepo.fetchEvents(conversationId: conversationId)
-        budgets = (try? await budgetFetch) ?? []
-        events  = (try? await eventFetch)  ?? []
+        async let overviewFetch = repo.fetchOverviews(conversationId: conversationId)
+        async let eventFetch = eventRepo.fetchEvents(conversationId: conversationId)
+        budgets = (try? await budgetFetch) ?? budgets
+        overviews = (try? await overviewFetch) ?? overviews
+        events = (try? await eventFetch) ?? events
+        // One dictionary, not a per-row scan of `events` (yaply-ios#31).
+        eventNames = Dictionary(events.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         isLoading = false
+
+        if let focusItemId, !didApplyFocus, let match = budgets.first(where: { $0.id == focusItemId }) {
+            didApplyFocus = true
+            open(match)
+        }
     }
 }
 
 private struct BudgetRowView: View {
     let budget: YaplyBudget
-    let events: [YaplyEvent]
-
-    private var linkedEventName: String? {
-        guard let eid = budget.eventId else { return nil }
-        return events.first { $0.id == eid }?.name
-    }
+    let overview: BudgetOverview?
+    let linkedEventName: String?
 
     var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.yaplyConfirmedGreen)
-                    .frame(width: 36, height: 36)
-                Image(systemName: "dollarsign.circle")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.yaplyMint)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    if budget.locked {
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(Color.orange)
-                    }
-                    Text(budget.name)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Color.yaplyPrimary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.yaplyConfirmedGreen)
+                        .frame(width: 36, height: 36)
+                    Image(systemName: "dollarsign.circle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.yaplyMint)
                 }
-                if let eventName = linkedEventName {
-                    Label(eventName, systemImage: "link")
-                        .font(.caption)
-                        .foregroundStyle(Color.yaplyAccent)
-                } else {
+                VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
-                        Text("by \(budget.creator?.name ?? "Unknown")")
-                        Text("·").foregroundStyle(Color.yaplySecondary.opacity(0.4))
-                        Text("\(budget.currency) \(String(format: "%.2f", budget.totalAmount))")
+                        if budget.locked {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 10))
+                                .foregroundStyle(Color.orange)
+                        }
+                        Text(budget.name)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(Color.yaplyPrimary)
+                            .lineLimit(1)
                     }
-                    .font(.caption)
-                    .foregroundStyle(Color.yaplySecondary)
+                    if let linkedEventName {
+                        Label(linkedEventName, systemImage: "link")
+                            .font(.caption)
+                            .foregroundStyle(Color.yaplyAccent)
+                    } else {
+                        Text("by \(budget.creator?.name ?? "Unknown")")
+                            .font(.caption)
+                            .foregroundStyle(Color.yaplySecondary)
+                    }
                 }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(BudgetMoney.format(overview?.spent ?? 0, currency: budget.currency))
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.yaplyAccent)
+                    Text(budget.totalAmount.map { "of \(BudgetMoney.format($0, currency: budget.currency))" } ?? "spent")
+                        .font(.caption)
+                        .foregroundStyle(Color.yaplySecondary)
+                }
+            }
+            if let cap = budget.totalAmount {
+                BudgetCapBar(spent: overview?.spent ?? 0, cap: cap)
+            }
+            if let overview {
+                BudgetNetLabel(net: overview.myNet, currency: budget.currency)
+                    .font(.caption)
             }
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
     }
 }

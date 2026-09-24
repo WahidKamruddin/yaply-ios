@@ -77,6 +77,10 @@ final class ChatViewModel {
     private var reconnectToken: UUID?
     private var isTyping = false
     private var typingDebounce: Task<Void, Never>?
+    private var receiptsTask: Task<Void, Never>?
+    /// `created_at` of the newest row the initial page fetch returned — the
+    /// catch-up after the first subscribe fetches only what landed after it.
+    private var newestFetchedAt: Date?
 
     // In-memory identity-key cache — avoids a Keychain read on every message decrypt.
     // (No per-conversation derived-key cache under v2 — every message has its own key.)
@@ -90,21 +94,31 @@ final class ChatViewModel {
 
     func onAppear() async {
         isLoading = true
-        async let msgs: Void = loadMessages()
-        async let conv: Void = loadConversationInfo()
-        async let reqState: Void = loadMyRequestState()
-        async let pins: Void = loadPins()
-        await msgs
-        await conv
-        await reqState
-        await pins
+        let initialLoad = Task {
+            async let msgs: Void = loadMessages()
+            async let conv: Void = loadConversationInfo()
+            async let reqState: Void = loadMyRequestState()
+            async let pins: Void = loadPins()
+            await msgs
+            await conv
+            await reqState
+            await pins
+        }
+        // Subscribe alongside the first fetch, not after it. This used to wait for
+        // every load, registration and the receipts round-trips before joining, and
+        // anything sent in that window (seconds on cellular) never appeared until the
+        // next reconnect. The realtime task closes the fetch→join gap itself.
+        startRealtime(initialLoad: initialLoad)
+        await initialLoad.value
         isLoading = false
-        try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
+        // Warm the device list so the first send is a single round-trip.
+        DeviceListCache.prefetch(userIds: memberIdsForEncryption(), repository: repository)
         await markAndFetchReceipts()
-        startRealtime()
     }
 
     func onDisappear() {
+        receiptsTask?.cancel()
+        receiptsTask = nil
         sendTypingEvent(false)
         typingDebounce?.cancel()
         typingTimers.values.forEach { $0.cancel() }
@@ -119,10 +133,13 @@ final class ChatViewModel {
             let (raw, cursor) = try await repository.fetchMessages(conversationId: conversationId)
             nextCursor = cursor
             hasMore = cursor != nil
+            newestFetchedAt = raw.first?.createdAt
             let ids = raw.map(\.id)
             async let decrypted = decryptAll(raw)
             async let rawReactions = repository.fetchReactions(messageIds: ids)
-            messages = await decrypted
+            // Merged, not assigned: realtime is already live while this page loads, and
+            // a reconnect catch-up can land first too.
+            merge(await decrypted)
             if let reactions = try? await rawReactions {
                 reactionsMap = buildReactionGroups(from: reactions)
             }
@@ -298,13 +315,17 @@ final class ChatViewModel {
             : ([], false)
 
         do {
+            let sendStart = ContinuousClock.now
             // Registration is single-flight — safe to call even if already done.
             try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
 
             let sent: DbMessage
-            if let sealed = await EnvelopeEncryption.encryptForMembers(
+            let sealStart = ContinuousClock.now
+            let sealed = await EnvelopeEncryption.encryptForMembers(
                 plaintext: text, memberUserIds: memberIdsForEncryption(), repository: repository
-            ) {
+            )
+            let sealMs = Self.ms(since: sealStart)
+            if let sealed {
                 let params = SendMessageWithEnvelopesParams(
                     pConversationId: conversationId, pContent: sealed.content, pIv: sealed.iv,
                     pEnvelopes: sealed.envelopes, pType: "text",
@@ -323,6 +344,7 @@ final class ChatViewModel {
                 )
                 sent = try await repository.sendMessage(params)
             }
+            print("[Perf] sent \(sent.id): total \(Self.ms(since: sendStart))ms, seal \(sealMs)ms (device lookup + wrap)")
 
             // Realtime may have already inserted the real message before this returns
             if messages.contains(where: { $0.id == sent.id }) {
@@ -627,7 +649,10 @@ final class ChatViewModel {
 
     // MARK: - Real-time
 
-    func startRealtime(refetchOnSubscribe: Bool = false) {
+    /// `initialLoad` is the first page fetch from `onAppear`, running concurrently.
+    /// Once joined, the task waits for it and then fetches only what arrived since,
+    /// because the fetch's snapshot can predate the join.
+    func startRealtime(refetchOnSubscribe: Bool = false, initialLoad: Task<Void, Never>? = nil) {
         realtimeTask?.cancel()
         RealtimeConnectionMonitor.remove(pgChannel); pgChannel = nil
         RealtimeConnectionMonitor.remove(typingChannel); typingChannel = nil
@@ -665,7 +690,15 @@ final class ChatViewModel {
             // Catch up *after* the subscription is live, never before: an event landing
             // during the refetch is then either delivered live or included in the fetch.
             // Refetching first would lose exactly that window.
-            if refetchOnSubscribe { await catchUpAfterReconnect() }
+            if refetchOnSubscribe {
+                await catchUpAfterReconnect()
+            } else if let initialLoad {
+                // Events arriving meanwhile are buffered by the streams above and
+                // de-duplicated by id when the group below drains them.
+                await initialLoad.value
+                guard !Task.isCancelled else { return }
+                await mergeMessagesSinceInitialLoad()
+            }
 
             // Message events are consumed from here on regardless of the typing channel.
             // Typing used to be subscribed *before* this group started, so a typing
@@ -776,20 +809,57 @@ final class ChatViewModel {
     // already landed, sendMessage's completion path resolves the brief duplicate.
     private func mergeLatestMessages() async {
         guard let (raw, _) = try? await repository.fetchMessages(conversationId: conversationId) else { return }
-        let fresh = await decryptAll(raw)
+        merge(await decryptAll(raw))
+        await markAndFetchReceipts()
+    }
 
+    /// Closes the gap between the initial page's snapshot and the channel joining.
+    /// Usually returns nothing, so it costs one small query rather than the full
+    /// page + envelopes + reactions a reconnect catch-up pays.
+    private func mergeMessagesSinceInitialLoad() async {
+        guard let since = newestFetchedAt else {
+            // Empty conversation, or the first fetch failed.
+            await mergeLatestMessages()
+            return
+        }
+        guard let raw = try? await repository.fetchMessagesSince(conversationId: conversationId, after: since),
+              !raw.isEmpty
+        else { return }
+        // fetchMessagesSince caps at 20; more than that is a full page's worth.
+        if raw.count >= 20 {
+            await mergeLatestMessages()
+            return
+        }
+        merge(await decryptAll(raw))
+        scheduleReceipts()
+    }
+
+    /// Fetched rows replace their local counterparts (edits, deleted_at flips);
+    /// everything else, including in-flight optimistic sends, is kept. Tie-break on
+    /// id so messages sharing a timestamp keep a stable order rather than shuffling.
+    private func merge(_ fresh: [DecryptedMessage]) {
+        guard !messages.isEmpty else {
+            messages = fresh
+            return
+        }
         var byId: [UUID: DecryptedMessage] = [:]
         for message in messages { byId[message.id] = message }
         for message in fresh { byId[message.id] = message }
-        // Tie-break on id so messages sharing a timestamp keep a stable order across
-        // reconnects rather than shuffling.
         messages = byId.values.sorted {
             $0.createdAt == $1.createdAt
                 ? $0.id.uuidString < $1.id.uuidString
                 : $0.createdAt < $1.createdAt
         }
+    }
 
-        await markAndFetchReceipts()
+    /// Debounced so a burst of incoming messages costs one receipts round-trip pair.
+    private func scheduleReceipts() {
+        receiptsTask?.cancel()
+        receiptsTask = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            await markAndFetchReceipts()
+        }
     }
 
     private func handleTyping(_ payload: JSONObject) async {
@@ -888,6 +958,7 @@ final class ChatViewModel {
             deletedAt: record["deleted_at"]?.stringValue.flatMap(Self.parseRealtimeDate),
             createdAt: createdAt, senderProfile: nil
         )
+        let decryptStart = ContinuousClock.now
         let (decryptedContent, failed) = await decryptDbMessage(dbMsg)
 
         let msg = DecryptedMessage(
@@ -903,7 +974,11 @@ final class ChatViewModel {
             decryptFailed: failed
         )
         messages.append(msg)
-        await markAndFetchReceipts()
+        // created_at is the server's clock, so the first figure includes any skew.
+        print("[Perf] received \(id): rendered \(Int(Date().timeIntervalSince(createdAt) * 1000))ms after created_at, decrypt \(Self.ms(since: decryptStart))ms")
+        // Off the receive path: this is two round-trips, and awaiting it here held
+        // up the next queued insert in the same `for await` loop.
+        scheduleReceipts()
     }
 
     private func handleMessageUpdate(_ record: [String: AnyJSON]) async {
@@ -954,6 +1029,12 @@ final class ChatViewModel {
             profile.lastSeenAt = lastSeen
         }
         conversationMembers[idx].profile = profile
+    }
+
+    /// Elapsed milliseconds, for the `[Perf]` log lines.
+    static func ms(since start: ContinuousClock.Instant) -> Int {
+        let d = start.duration(to: .now).components
+        return Int(d.seconds * 1000 + d.attoseconds / 1_000_000_000_000_000)
     }
 
     // Supabase Realtime sends timestamptz as ISO8601 with optional fractional seconds.

@@ -5,7 +5,7 @@ struct ConversationDetailView: View {
     let currentUserId: UUID
     var members: [MemberSummary] = []
     var initialTab: String = "reminders"
-    /// A note/budget to open on arrival (from an item-created pill or Home).
+    /// A note to expand, or a budget to open, on arrival (from Home).
     var focusItemId: UUID? = nil
 
     private var isCurrentUserAdmin: Bool {
@@ -115,7 +115,7 @@ struct ConversationDetailView: View {
         case "albums":
             AlbumListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
         case "budgets":
-            BudgetListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin, focusItemId: focusItemId)
+            BudgetListView(conversationId: conversationId, currentUserId: currentUserId, members: members, isCurrentUserAdmin: isCurrentUserAdmin, focusItemId: focusItemId)
         default:
             ReminderListView(conversationId: conversationId, currentUserId: currentUserId, isCurrentUserAdmin: isCurrentUserAdmin)
         }

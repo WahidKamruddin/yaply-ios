@@ -38,7 +38,14 @@ these are the CryptoKit-specific rules that must not drift:
   Never fall back to decoding raw bytes.
 - **Registration is single-flight.** `EncryptionRegistrar` shares one in-flight task
   per user; encrypt and decrypt **await** it so a send right after login is never
-  downgraded to phase-1 or reported as a false failure.
+  downgraded to phase-1 or reported as a false failure. A success is **memoized**
+  for 30 min per user (while the Keychain still holds the same `device_id`), so the
+  per-message calls are free; without it every send and every received message paid
+  the orphan-check SELECT + `devices` UPSERT.
+- **Device lists come from `DeviceListCache`** (60s TTL, like web's
+  `devicesMemCache`): one `devices` query answers both the phase-1 "any device?"
+  check and the 90-day recipient filter. The registrar invalidates the user's entry
+  after every registration so this install is never missing from its own sends.
 - **In-memory key caches are keyed by userId** — never a single mutable slot with an
   owner check (see the web file for the sign-out/sign-in race that caused).
   `KeyStore.privateKeyCache` is `[UUID: [String: PrivateKey]]` (user id, then
@@ -240,6 +247,12 @@ is why web never needed this):
   (Pairing is exempt: a one-shot random topic that needs channel options.)
 - **Refetch on reconnect, not just resubscribe**, and **subscribe first, then refetch**
   (inside the realtime task, right after `subscribe` returns).
+- **Chat subscribes alongside its first page load, not after it.** `onAppear` passes
+  the load task to `startRealtime(initialLoad:)`; once joined it awaits the load, then
+  `mergeMessagesSinceInitialLoad` fetches only rows newer than the page. Loaders
+  **merge** into `messages`, never assign. Read receipts are debounced
+  (`scheduleReceipts`), never awaited inside a stream loop — that queued each
+  incoming message behind the previous one's two round-trips.
 - **Never give up.** `subscribe` retries forever with capped backoff (2/4/8/16/30s).
   Safe only because it runs inside a `realtimeTask` that every `startRealtime`
   cancels on teardown — keep that relationship.
@@ -375,9 +388,9 @@ GIPHY_API_KEY = your-giphy-key
   `MessageBubbleView` returns `EmptyView` when `deletedAt <= Date()` (never
   "Message deleted"); `previewText` checks `system` before `isDeleted`. Open →
   `ChatView.openItem`: task/reminder → panel tab; plan/event → `.eventDetail`;
-  album → `.albumDetail`; note/budget → `.conversationPanel(focusItemId:)`
-  (note expands, budget row is outlined — no budget detail page); a deleted item
-  falls back to its tab. Home rows push the chat, then the item. Non-JSON content is
+  album → `.albumDetail`; budget → `.budgetDetail` (loads by id, shows its own
+  "deleted" state); note → `.conversationPanel(focusItemId:)` (note expands); a
+  deleted item falls back to its tab. Home rows push the chat, then the item. Non-JSON content is
   legacy text: `systemMessageTabMap` prefix → tab link only.
 - **Sidebar refetch after slash commands:** after a `/task` `/note` `/remind`
   `/album` `/budget` `/event` `/plan` insert, `ChatView` posts
@@ -397,6 +410,33 @@ GIPHY_API_KEY = your-giphy-key
   `.swipeActions` gated on creator/admin where RLS would reject the write.
 - **SourceKit cross-file diagnostics** are spurious for new files ("Cannot find
   type") — verify in Xcode, not the SourceKit panel.
+
+---
+
+## Budgets (shared expenses)
+
+Contract (tables, RPCs, equal-split cents rule, balance formula) is in
+`../CLAUDE.md` → *Budgets (shared expenses)*. Files: `Features/Budgets/`
+(`BudgetRepository.swift`, `BudgetMoney.swift`, `BudgetListView.swift`,
+`ViewModels/BudgetDetailViewModel.swift`, `Views/BudgetDetailView.swift`,
+`Views/ExpenseFormSheet.swift` incl. `SettleUpSheet`).
+
+- **Money is `Decimal`, form math is integer cents** (`BudgetMoney.parseCents`,
+  rejects > 2 decimals). Never `Double` for amounts.
+- **Writes are RPC only** (`save_expense`, `delete_expense`, `record_settlement`,
+  `delete_settlement`); the tables reject direct writes. `save_expense`'s
+  `p_expense_id` has no SQL default, so `Params` encodes an explicit `null` —
+  synthesized `Encodable` would drop it and PostgREST couldn't resolve the function.
+- **Render stored shares and server balances/debts only.** `previewEqualSplit`
+  mirrors the server rule (leftover cents to ascending lowercase-uuid order) for
+  the form preview; it is never saved.
+- `spent_on` is a bare `date` → decoded as a `String` (`BudgetDate`), like `birthdate`.
+- **Realtime:** `BudgetDetailViewModel` subscribes to `budgets` UPDATE filtered by
+  its id (every write RPC touches `updated_at`) plus unfiltered DELETE matched on
+  the old id, via `RealtimeConnectionMonitor`, refetching after subscribe.
+- Sheet errors come back from `vm.saveExpense` / `vm.recordSettlement` as a string
+  and render inline — an `.alert` on the page can't present over a `yaplyPopup`.
+- List cards use `get_budget_overviews` (one call) for spent + my balance.
 
 ---
 

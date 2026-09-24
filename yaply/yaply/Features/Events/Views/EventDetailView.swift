@@ -358,7 +358,7 @@ struct EventDetailView: View {
                                     Text(budget.name)
                                         .font(.system(size: 14))
                                         .foregroundStyle(Color.yaplyPrimary)
-                                    Text("\(budget.currency) \(String(format: "%.2f", budget.totalAmount))")
+                                    Text(budget.totalAmount.map { BudgetMoney.format($0, currency: budget.currency) } ?? "\(budget.currency) · no cap")
                                         .font(.system(size: 11))
                                         .foregroundStyle(Color.yaplySecondary)
                                 }
@@ -418,7 +418,7 @@ struct EventDetailView: View {
                 Text(budget.name)
                     .font(.system(size: 14))
                     .foregroundStyle(Color.yaplyPrimary)
-                Text("\(budget.currency) \(String(format: "%.2f", budget.totalAmount))")
+                Text(budget.totalAmount.map { BudgetMoney.format($0, currency: budget.currency) } ?? "\(budget.currency) · no cap")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.yaplySecondary)
             }

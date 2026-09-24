@@ -20,4 +20,8 @@ enum AppRoute: Hashable {
 
     /// A single album's gallery, pushed as its own page.
     case albumDetail(album: YaplyAlbum, isCurrentUserAdmin: Bool)
+
+    /// A single budget (expenses, balances, settle-up). Loads by id, so a pill
+    /// can deep-link here without fetching the row first.
+    case budgetDetail(budgetId: UUID, conversationId: UUID, members: [MemberSummary])
 }

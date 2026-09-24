@@ -20,11 +20,14 @@ enum EnvelopeEncryption {
     ) async -> (content: String, iv: String, envelopes: [EnvelopePayload])? {
         guard !memberUserIds.isEmpty else { return nil }
 
-        guard let usersWithAnyDevice = try? await repository.fetchUserIdsWithAnyDevice(userIds: memberUserIds),
-              memberUserIds.allSatisfy({ usersWithAnyDevice.contains($0) })
+        // One cached lookup for both checks — this used to be two sequential
+        // `devices` queries on every send, ahead of the RPC itself.
+        guard let byUser = try? await DeviceListCache.devices(for: memberUserIds, repository: repository),
+              memberUserIds.allSatisfy({ !(byUser[$0] ?? []).isEmpty })
         else { return nil }
 
-        guard let devices = try? await repository.fetchActiveDeviceRows(userIds: memberUserIds) else { return nil }
+        let cutoff = Date().addingTimeInterval(-90 * 24 * 60 * 60)
+        let devices = byUser.values.joined().filter { ($0.lastActiveAt ?? .distantPast) > cutoff }
 
         let mk = EncryptionService.generateMessageKey()
         guard let sealed = try? EncryptionService.encryptMessage(plaintext, key: mk) else { return nil }
