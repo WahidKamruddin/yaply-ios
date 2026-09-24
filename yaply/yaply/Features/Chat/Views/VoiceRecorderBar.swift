@@ -10,14 +10,9 @@ struct VoiceRecorderBar: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Button {
+            IconButton(systemName: "trash", label: "Discard recording", weight: .regular, color: .yaplyDanger) {
                 recorder.cancel()
                 onCancel()
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 18))
-                    .foregroundStyle(Color.yaplyDanger)
-                    .frame(width: 36, height: 36)
             }
 
             HStack(spacing: 8) {
@@ -25,7 +20,7 @@ struct VoiceRecorderBar: View {
                     .fill(Color.yaplyDanger)
                     .frame(width: 9, height: 9)
                     .opacity(recorder.isRecording ? 1 : 0.3)
-                    .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: recorder.isRecording)
+                    .yaplyAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: recorder.isRecording)
 
                 Text(timeString(recorder.elapsed))
                     .font(.system(size: 15, weight: .medium, design: .monospaced))
@@ -50,6 +45,8 @@ struct VoiceRecorderBar: View {
                     .background(Color.yaplyAccent)
                     .clipShape(Circle())
             }
+            .buttonStyle(YaplyPressStyle())
+            .accessibilityLabel("Send voice message")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
