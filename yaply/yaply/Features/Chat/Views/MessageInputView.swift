@@ -217,7 +217,12 @@ struct MessageInputView: View {
                 .padding(.vertical, 8)
                 .background(Color.yaplySurface)
                 .clipShape(RoundedRectangle(cornerRadius: 22))
-                .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.yaplyBorder))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22)
+                        .stroke(isFocused ? Color.yaplyAccent.opacity(0.5) : Color.yaplyBorder,
+                                lineWidth: isFocused ? 1.5 : 1)
+                )
+                .yaplyAnimation(.easeOut(duration: 0.15), value: isFocused)
 
                 Button(action: {
                     guard !text.isBlank else { return }
