@@ -189,6 +189,7 @@ struct YaplyConfirmView: View {
                 Button(config.confirmLabel) {
                     // Run the action before dismissing so it can still read any
                     // @State that the presenting binding clears on close.
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                     config.onConfirm()
                     dismiss()
                 }
