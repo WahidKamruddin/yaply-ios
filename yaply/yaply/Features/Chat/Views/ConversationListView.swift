@@ -60,6 +60,8 @@ struct ConversationListView: View {
                             }
                         }
                     }
+                    .buttonStyle(YaplyPressStyle())
+                    .accessibilityLabel("Friends")
                     .padding(.trailing, bottomTab == .chats ? 4 : 0)
                     if bottomTab == .chats {
                         Button(action: { showNewConversation = true }) {
@@ -77,6 +79,8 @@ struct ConversationListView: View {
                                 .clipShape(Circle())
                                 .shadow(color: Color.yaplyAccent.opacity(0.35), radius: 6, y: 3)
                         }
+                        .buttonStyle(YaplyPressStyle())
+                        .accessibilityLabel("New conversation")
                     }
                 }
                 .padding(.horizontal, 16)
@@ -215,7 +219,7 @@ struct ConversationListView: View {
                             Button(action: { router.push(.conversation(id: item.id)) }) {
                                 ConversationRowView(item: item, currentUserId: currentUserId)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(YaplyRowPressStyle())
                             .contextMenu { rowContextMenu(for: item) }
                         }
                     }
@@ -290,6 +294,7 @@ struct ConversationListView: View {
             .foregroundStyle(bottomTab == tab ? Color.yaplyAccent : Color.yaplySecondary)
             .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(YaplyPressStyle())
+        .accessibilityLabel(label)
     }
 }
