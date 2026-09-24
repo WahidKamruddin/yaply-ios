@@ -3,9 +3,12 @@ import SwiftUI
 struct AvailabilityCalendarView: View {
     let event: YaplyEvent
     let currentUserId: UUID
+    /// Opens the free-form date/time picker (owned by `EventDetailView`).
+    var onPickTime: (() -> Void)? = nil
 
-    private let cellH: CGFloat   = 20
-    private let timeW: CGFloat   = 34
+    private let cellH: CGFloat   = 22
+    private let timeW: CGFloat   = 30
+    private let gap: CGFloat     = 3
     private let startHour        = 8
     private let slotsPerDay      = 28   // 8am–10pm, 30-min slots
 
@@ -16,13 +19,17 @@ struct AvailabilityCalendarView: View {
     @State private var isLoading = true
     @State private var isSaving  = false
     @State private var confirmSlot: String? = nil
+    @State private var focusedMember: UUID? = nil
+    @State private var cellsIn = false
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let repo = EventRepository()
 
-    init(event: YaplyEvent, currentUserId: UUID) {
+    init(event: YaplyEvent, currentUserId: UUID, onPickTime: (() -> Void)? = nil) {
         self.event = event
         self.currentUserId = currentUserId
+        self.onPickTime = onPickTime
         _weekStart = State(initialValue: Self.startOfWeek(Date()))
     }
 
@@ -31,10 +38,17 @@ struct AvailabilityCalendarView: View {
     private var isCreator: Bool { event.createdBy == currentUserId }
     private var totalMembers: Int { max(1, members.count) }
 
-    private var availMap: [String: Int] {
+    /// Who (other than me) saved each slot. My own contribution comes from the
+    /// live `mySlots` selection so the heatmap reacts before Save.
+    private var othersBySlot: [String: Set<UUID>] {
         allAvail.reduce(into: [:]) { map, av in
-            for slot in av.slots { map[slot, default: 0] += 1 }
+            guard av.userId != currentUserId else { return }
+            for slot in av.slots { map[slot, default: []].insert(av.userId) }
         }
+    }
+
+    private var best: (slot: String, count: Int)? {
+        BestSlot.find(BestSlot.liveCounts(availability: allAvail, currentUserId: currentUserId, mySlots: mySlots))
     }
 
     private var weekDays: [Date] {
@@ -54,14 +68,6 @@ struct AvailabilityCalendarView: View {
         }
     }
 
-    private func heatColor(_ count: Int) -> Color {
-        guard count > 0 else { return Color.yaplyBackground }
-        let ratio = Double(count) / Double(totalMembers)
-        if ratio <= 0.33 { return Color.yaplyBorder }
-        if ratio <= 0.66 { return Color.yaplyAccent.opacity(0.6) }
-        return Color.yaplyAccent
-    }
-
     private func timeLabel(_ row: Int) -> String? {
         guard row % 2 == 0 else { return nil }
         let h = startHour + row / 2
@@ -74,6 +80,13 @@ struct AvailabilityCalendarView: View {
         f.timeZone = TimeZone(identifier: "UTC")
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f.string(from: date)
+    }
+
+    private static func slotDate(_ key: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: key)
     }
 
     private static func startOfWeek(_ date: Date) -> Date {
@@ -89,14 +102,11 @@ struct AvailabilityCalendarView: View {
         return "\(fmt.string(from: weekStart)) – \(fmt.string(from: end))"
     }
 
-    private let dayAbbr = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
+    private let dayAbbr = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
     private var confirmSlotMessage: String {
-        guard let slot = confirmSlot else { return "" }
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let d = f.date(from: slot) else { return slot }
-        return d.formatted(.dateTime.weekday(.wide).month(.wide).day().hour().minute())
+        guard let slot = confirmSlot, let d = Self.slotDate(slot) else { return "" }
+        return "Set \"\(event.name)\" for \(d.formatted(.dateTime.weekday(.wide).month(.wide).day().hour().minute()))? This moves the event from Planning to Confirmed."
     }
 
     // MARK: - Body
@@ -119,11 +129,11 @@ struct AvailabilityCalendarView: View {
 
             footerRow
         }
-        .background(Color.yaplyBackground)
+        .background(Color.yaplyCard)
         .task { await loadData() }
         .yaplyConfirm(
             isPresented: Binding(get: { confirmSlot != nil }, set: { if !$0 { confirmSlot = nil } }),
-            title: "Confirm this time?",
+            title: "Lock event time?",
             message: confirmSlotMessage,
             icon: "calendar.badge.checkmark",
             confirmLabel: "Confirm",
@@ -138,203 +148,211 @@ struct AvailabilityCalendarView: View {
     // MARK: - Week navigator
 
     private var weekNavRow: some View {
-        HStack {
-            Button {
+        HStack(alignment: .center) {
+            PlanRoundButton(systemImage: "chevron.left", label: "Previous week") {
                 weekStart = Calendar.current.date(byAdding: .day, value: -7, to: weekStart)!
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.yaplySecondary)
-                    .frame(width: 30, height: 30)
-                    .background(Color.yaplySurface)
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.yaplyBorder))
             }
-            Spacer()
-            Text(weekLabel())
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.yaplyPrimary)
-            Spacer()
-            Button {
+            Spacer(minLength: 8)
+            VStack(spacing: 5) {
+                Text(weekLabel())
+                    .font(.display(15, weight: .semibold))
+                    .foregroundStyle(Color.yaplyPrimary)
+                if let best, let date = Self.slotDate(best.slot) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { weekStart = Self.startOfWeek(date) }
+                    } label: {
+                        PlanBadge(
+                            text: "Best: \(date.formatted(.dateTime.weekday(.abbreviated).hour().minute())) · \(best.count)/\(totalMembers) free",
+                            uppercase: false,
+                            systemImage: "sparkles"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Jumps to the best time")
+                }
+            }
+            Spacer(minLength: 8)
+            PlanRoundButton(systemImage: "chevron.right", label: "Next week") {
                 weekStart = Calendar.current.date(byAdding: .day, value: 7, to: weekStart)!
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.yaplySecondary)
-                    .frame(width: 30, height: 30)
-                    .background(Color.yaplySurface)
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.yaplyBorder))
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(Color.yaplySurface)
-        .overlay(alignment: .bottom) { Divider() }
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) { Rectangle().fill(Color.yaplyBorder).frame(height: 1) }
     }
 
     // MARK: - Day header row
 
     private var dayHeaderRow: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: gap) {
             Spacer().frame(width: timeW)
             ForEach(Array(weekDays.enumerated()), id: \.offset) { _, day in
                 let wd = Calendar.current.component(.weekday, from: day) - 1
                 let dayNum = Calendar.current.component(.day, from: day)
                 let isToday = Calendar.current.isDateInToday(day)
-                VStack(spacing: 1) {
-                    Text(dayAbbr[wd])
-                        .font(.system(size: 9, weight: .medium))
+                VStack(spacing: 2) {
+                    Text(dayAbbr[wd].uppercased())
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .foregroundStyle(Color.yaplySecondary)
-                    ZStack {
-                        if isToday {
-                            Circle()
-                                .fill(Color.yaplyAccent)
-                                .frame(width: 18, height: 18)
-                        }
-                        Text("\(dayNum)")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(isToday ? .white : Color.yaplyPrimary)
-                    }
+                    Text("\(dayNum)")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(isToday ? .white : Color.yaplyPrimary)
+                        .frame(width: 24, height: 24)
+                        .background { if isToday { Circle().fill(PlanStyle.gradient) } }
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 4)
             }
         }
-        .background(Color.yaplySurface)
-        .overlay(alignment: .bottom) { Divider() }
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
     }
 
     // MARK: - Grid rows
 
     private var gridRows: some View {
-        VStack(spacing: 0) {
+        let others = othersBySlot
+        let bestKey = best?.slot
+        let days = weekDays.map { slots(for: $0) }
+
+        return VStack(spacing: gap) {
             ForEach(0..<slotsPerDay, id: \.self) { row in
-                HStack(spacing: 0) {
-                    // Time label
-                    ZStack {
-                        if let label = timeLabel(row) {
-                            Text(label)
-                                .font(.system(size: 8))
-                                .foregroundStyle(Color.yaplySecondary)
-                        }
-                    }
-                    .frame(width: timeW, height: cellH)
+                HStack(spacing: gap) {
+                    Text(timeLabel(row) ?? "")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(Color.yaplySecondary)
+                        .frame(width: timeW, height: cellH, alignment: .trailing)
+                        .padding(.trailing, 2)
 
-                    // 7 day cells
-                    ForEach(Array(weekDays.enumerated()), id: \.offset) { dayIdx, day in
-                        let s = slots(for: day)[row]
-                        let count   = availMap[s.key] ?? 0
-                        let isMine  = mySlots.contains(s.key)
-                        let canConfirm = isCreator && count > 0 && !isMine
+                    ForEach(0..<days.count, id: \.self) { dayIdx in
+                        let s = days[dayIdx][row]
+                        let isMine = mySlots.contains(s.key)
+                        let othersHere = others[s.key] ?? []
+                        let count = othersHere.count + (isMine ? 1 : 0)
+                        let isBest = s.key == bestKey
+                        let dimmed: Bool = {
+                            guard let m = focusedMember else { return false }
+                            return m == currentUserId ? !isMine : !othersHere.contains(m)
+                        }()
 
-                        Rectangle()
-                            .fill(isMine
-                                  ? Color.yaplyPrimary
-                                  : heatColor(count))
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(PlanStyle.heatFill(BestSlot.level(count: count, total: totalMembers)))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .strokeBorder(isMine ? PlanStyle.sky : Color.yaplyBorderSoft, lineWidth: isMine ? 2 : 1)
+                            }
                             .frame(maxWidth: .infinity)
                             .frame(height: cellH)
-                            .overlay(alignment: .trailing) {
-                                if dayIdx < 6 {
-                                    Rectangle()
-                                        .fill(Color.yaplyBorder.opacity(0.4))
-                                        .frame(width: 0.5)
-                                }
-                            }
+                            .planBestGlow(isBest)
+                            .opacity(dimmed ? 0.2 : 1)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                withAnimation(.easeInOut(duration: 0.08)) {
+                                withAnimation(.easeInOut(duration: 0.12)) {
                                     if mySlots.contains(s.key) { mySlots.remove(s.key) }
                                     else { mySlots.insert(s.key) }
                                 }
                             }
                             .onLongPressGesture(minimumDuration: 0.45) {
-                                if canConfirm { confirmSlot = s.key }
+                                if isCreator && count > 0 { confirmSlot = s.key }
                             }
+                            .accessibilityElement()
+                            .accessibilityLabel("\(s.date.formatted(.dateTime.weekday(.wide).hour().minute())), \(count) of \(totalMembers) free\(isBest ? ", best time" : "")")
+                            .accessibilityAddTraits(isMine ? [.isButton, .isSelected] : .isButton)
                     }
                 }
-                // Row border: full divider every hour, faint every half-hour
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(row % 2 == 1
-                              ? Color.yaplyBorder.opacity(0.6)
-                              : Color.yaplyBorder.opacity(0.25))
-                        .frame(height: 0.5)
-                }
+                .padding(.top, row > 0 && row % 2 == 0 ? 3 : 0)
+                .opacity(cellsIn ? 1 : 0)
+                .scaleEffect(cellsIn ? 1 : 0.92)
+                .animation(
+                    reduceMotion ? nil : .easeOut(duration: 0.3).delay(Double(row) * 0.014),
+                    value: cellsIn
+                )
             }
         }
-        .background(Color.yaplySurface)
+        .padding(.horizontal, 8)
+        .padding(.bottom, 12)
+        .onAppear { cellsIn = true }
     }
 
     // MARK: - Member chips
 
     private var memberChipsRow: some View {
-        VStack(spacing: 0) {
-            Divider()
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(members) { member in
-                        let slotCount = allAvail.first { $0.userId == member.userId }?.slots.count ?? 0
-                        HStack(spacing: 5) {
-                            Circle()
-                                .fill(Color.yaplyAccent.opacity(0.12))
-                                .frame(width: 22, height: 22)
-                                .overlay(
-                                    Text(member.initials)
-                                        .font(.system(size: 9, weight: .semibold))
-                                        .foregroundStyle(Color.yaplyAccent)
-                                )
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(members) { member in
+                    let slotCount = allAvail.first { $0.userId == member.userId }?.slots.count ?? 0
+                    let active = focusedMember == member.userId
+                    let name = member.userId == currentUserId ? "You" : member.name
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            focusedMember = active ? nil : member.userId
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            AvatarView(url: member.avatarUrl, name: member.name, size: 22)
                             VStack(alignment: .leading, spacing: 0) {
-                                Text(member.userId == currentUserId ? "You" : member.name)
-                                    .font(.system(size: 11, weight: .medium))
+                                Text(name)
+                                    .font(.system(size: 11, weight: .semibold))
                                     .foregroundStyle(Color.yaplyPrimary)
                                     .lineLimit(1)
                                 Text("\(slotCount) slot\(slotCount == 1 ? "" : "s")")
-                                    .font(.system(size: 9))
+                                    .font(.system(size: 9, design: .monospaced))
                                     .foregroundStyle(Color.yaplySecondary)
                             }
                         }
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 5)
-                        .background(Color.yaplySurface)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yaplyBorder))
+                        .padding(.leading, 3)
+                        .padding(.trailing, 11)
+                        .padding(.vertical, 3)
+                        .background(active ? Color.yaplyAccent.opacity(0.12) : Color.yaplyTint, in: Capsule())
+                        .overlay(Capsule().stroke(active ? Color.yaplyAccent.opacity(0.4) : Color.yaplyBorder, lineWidth: 1))
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Highlights the times \(name) is free")
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
         }
-        .background(Color.yaplyBackground)
+        .overlay(alignment: .top) { Rectangle().fill(Color.yaplyBorder).frame(height: 1) }
     }
 
     // MARK: - Footer
 
     private var footerRow: some View {
-        HStack {
-            Text(isCreator
-                 ? "Long-press a shared slot to lock the time"
-                 : "Tap cells to mark your availability")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.yaplySecondary)
-            Spacer()
+        HStack(spacing: 10) {
+            if isCreator {
+                Button {
+                    if let best { confirmSlot = best.slot }
+                } label: {
+                    Label("Lock best time", systemImage: "lock.fill")
+                }
+                .buttonStyle(PlanPillStyle(primary: true))
+                .disabled(best == nil)
+
+                if let onPickTime {
+                    Button("Other time", action: onPickTime)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(PlanStyle.sky)
+                }
+            } else {
+                Text("tap the times you’re free — the best slot lights up")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(Color.yaplySecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
             Button {
                 Task { await save() }
             } label: {
                 Text(isSaving ? "Saving…" : "Save")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(isSaving ? Color.yaplySecondary : Color.yaplyAccent)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
             }
+            .buttonStyle(PlanPillStyle(primary: true))
             .disabled(isSaving)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(Color.yaplySurface)
-        .overlay(alignment: .top) { Divider() }
+        .overlay(alignment: .top) { Rectangle().fill(Color.yaplyBorder).frame(height: 1) }
     }
 
     // MARK: - Actions
@@ -366,9 +384,7 @@ struct AvailabilityCalendarView: View {
 
     @MainActor
     private func doConfirm(_ slot: String) async {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let start = f.date(from: slot) else { return }
+        guard let start = Self.slotDate(slot) else { return }
         let end = start.addingTimeInterval(3600)
         try? await repo.confirmEvent(id: event.id, startsAt: start, endsAt: end)
         NotificationCenter.default.post(name: .yaplyItemCreated, object: nil, userInfo: ["type": "events"])

@@ -85,15 +85,12 @@ struct EventDetailView: View {
 
     private var planningView: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    statusBadge
-                    Text(event.name)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.yaplyPrimary)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                }
+            VStack(alignment: .leading, spacing: 6) {
+                statusBadge
+                Text(event.name)
+                    .font(.display(20))
+                    .foregroundStyle(Color.yaplyPrimary)
+                    .lineLimit(2)
                 if let desc = event.description, !desc.isEmpty {
                     Text(desc)
                         .font(.system(size: 13))
@@ -114,20 +111,15 @@ struct EventDetailView: View {
                 Rectangle().fill(Color.yaplyBorder).frame(height: 1)
             }
 
-            AvailabilityCalendarView(event: event, currentUserId: currentUserId)
+            AvailabilityCalendarView(
+                event: event,
+                currentUserId: currentUserId,
+                onPickTime: isCreator ? { activeSheet = .lockTime } : nil
+            )
         }
         .background(Color.yaplyBackground)
         .navigationTitle("Plan")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if isCreator {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Lock Time") { activeSheet = .lockTime }
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.yaplyAccent)
-                }
-            }
-        }
     }
 
     // MARK: - Confirmed mode
@@ -135,79 +127,88 @@ struct EventDetailView: View {
     private var confirmedView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                // Header card
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(event.name)
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(Color.yaplyPrimary)
+                // Event card (landing page `.lp-event`)
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .top, spacing: 10) {
+                        Text(event.name)
+                            .font(.display(22))
+                            .foregroundStyle(Color.yaplyPrimary)
+                        Spacer(minLength: 0)
+                        statusBadge
+                    }
                     if let desc = event.description, !desc.isEmpty {
                         Text(desc)
                             .font(.system(size: 14))
-                            .foregroundStyle(Color.yaplySecondary)
+                            .foregroundStyle(Color.yaplyTertiary)
+                            .padding(.top, 6)
                     }
-                    if let starts = event.startsAt {
-                        Label(
-                            starts.formatted(.dateTime.weekday(.wide).month(.wide).day().hour().minute()),
-                            systemImage: "calendar"
-                        )
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.yaplySecondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let starts = event.startsAt {
+                            Label(
+                                starts.formatted(.dateTime.weekday(.wide).month(.wide).day().hour().minute()),
+                                systemImage: "calendar"
+                            )
+                        }
+                        if let loc = event.location, !loc.isEmpty {
+                            Label(loc, systemImage: "mappin")
+                        }
                     }
-                    if let loc = event.location, !loc.isEmpty {
-                        Label(loc, systemImage: "mappin")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Color.yaplySecondary)
-                    }
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.yaplyTint)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(Color.yaplyTertiary)
+                    .labelStyle(PlanMetaLabelStyle())
+                    .padding(.top, 10)
 
-                // RSVP section
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("RSVP")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.yaplyPrimary)
-                        Spacer()
-                        if !rsvps.isEmpty {
-                            Text(tallyText)
+                    if isLoading {
+                        ProgressView().tint(Color.yaplyAccent).padding(.top, 16)
+                    } else {
+                        HStack(spacing: 8) {
+                            RsvpButton(label: "Going", value: "going",     count: going.count,    current: myResponse, isSaving: isSaving) { await tap("going") }
+                            RsvpButton(label: "Maybe", value: "maybe",     count: maybe.count,    current: myResponse, isSaving: isSaving) { await tap("maybe") }
+                            RsvpButton(label: "Can’t", value: "not_going", count: notGoing.count, current: myResponse, isSaving: isSaving) { await tap("not_going") }
+                        }
+                        .padding(.top, 16)
+
+                        HStack(spacing: 12) {
+                            if !going.isEmpty {
+                                PlanStackedFaces(people: going.map { (id: $0.userId, name: displayName($0), avatarUrl: $0.profile?.avatarUrl) })
+                            }
+                            Text(goingNote)
                                 .font(.system(size: 12))
                                 .foregroundStyle(Color.yaplySecondary)
                         }
+                        .frame(minHeight: 28)
+                        .padding(.top, 16)
                     }
-                    if isLoading {
-                        ProgressView().tint(Color.yaplyAccent)
-                    } else {
-                        HStack(spacing: 10) {
-                            RsvpButton(label: "Going",     value: "going",     current: myResponse, isSaving: isSaving) { await tap("going") }
-                            RsvpButton(label: "Maybe",     value: "maybe",     current: myResponse, isSaving: isSaving) { await tap("maybe") }
-                            RsvpButton(label: "Can't Go",  value: "not_going", current: myResponse, isSaving: isSaving) { await tap("not_going") }
-                        }
-                        if !rsvps.isEmpty {
-                            Divider()
-                            ForEach(rsvps) { rsvp in
-                                HStack(spacing: 10) {
-                                    Circle()
-                                        .fill(responseColor(rsvp.response).opacity(0.15))
-                                        .frame(width: 32, height: 32)
-                                        .overlay(Text(responseIcon(rsvp.response)).font(.system(size: 13)))
-                                    Text(displayName(rsvp))
-                                        .font(.system(size: 14))
-                                        .foregroundStyle(Color.yaplyPrimary)
-                                    Spacer()
-                                    Text(responseLabel(rsvp.response))
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(responseColor(rsvp.response))
-                                }
+                }
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.yaplyTint, in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.yaplyBorder, lineWidth: 1))
+
+                // Who responded
+                if !isLoading && !rsvps.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("RESPONSES")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .tracking(1)
+                            .foregroundStyle(Color.yaplySecondary)
+                        ForEach(rsvps) { rsvp in
+                            HStack(spacing: 10) {
+                                AvatarView(url: rsvp.profile?.avatarUrl, name: displayName(rsvp), size: 30)
+                                Text(displayName(rsvp))
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(Color.yaplyPrimary)
+                                Spacer()
+                                Text(responseLabel(rsvp.response))
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(responseColor(rsvp.response))
                             }
                         }
                     }
+                    .padding(16)
+                    .background(Color.yaplyTint, in: RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.yaplyBorder, lineWidth: 1))
                 }
-                .padding(16)
-                .background(Color.yaplyTint)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
 
                 // Linked Albums
                 linkedSection(
@@ -496,23 +497,12 @@ struct EventDetailView: View {
     }
 
     private var statusBadge: some View {
-        Text(event.isPlanning ? "Planning" : "Confirmed")
-            .font(.system(size: 11, weight: .semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(event.isPlanning
-                ? Color.yaplyBackground
-                : Color.yaplyConfirmedGreen)
-            .foregroundStyle(event.isPlanning ? Color.yaplyAccent : .green)
-            .clipShape(Capsule())
+        PlanBadge(text: event.isPlanning ? "Planning" : "Confirmed")
     }
 
-    private var tallyText: String {
-        var parts: [String] = []
-        if going.count    > 0 { parts.append("\(going.count) going") }
-        if maybe.count    > 0 { parts.append("\(maybe.count) maybe") }
-        if notGoing.count > 0 { parts.append("\(notGoing.count) can't go") }
-        return parts.joined(separator: " · ")
+    private var goingNote: String {
+        if going.isEmpty { return "No one’s said they’re going yet" }
+        return "\(going.count) going"
     }
 
     private func displayName(_ rsvp: YaplyEventRsvp) -> String {
@@ -522,19 +512,9 @@ struct EventDetailView: View {
 
     private func responseColor(_ response: String) -> Color {
         switch response {
-        case "going":     return .green
+        case "going":     return PlanStyle.sky
         case "maybe":     return .orange
-        case "not_going": return .red
         default:          return Color.yaplySecondary
-        }
-    }
-
-    private func responseIcon(_ response: String) -> String {
-        switch response {
-        case "going":     return "✓"
-        case "maybe":     return "?"
-        case "not_going": return "✕"
-        default:          return "–"
         }
     }
 
@@ -597,6 +577,7 @@ struct EventDetailView: View {
 private struct RsvpButton: View {
     let label: String
     let value: String
+    let count: Int
     let current: String
     let isSaving: Bool
     let onTap: () async -> Void
@@ -607,25 +588,23 @@ private struct RsvpButton: View {
         Button {
             Task { await onTap() }
         } label: {
-            Text(label)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(isActive ? .white : Color.yaplyPrimary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 9)
-                .background(isActive ? activeColor : Color.yaplySurface)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(isActive ? activeColor : Color.yaplyBorder))
+            Text("\(label) · \(count)")
         }
+        .buttonStyle(PlanPillStyle(primary: isActive, fill: true))
         .disabled(isSaving)
         .animation(.easeInOut(duration: 0.15), value: isActive)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
+}
 
-    private var activeColor: Color {
-        switch value {
-        case "going":     return .green
-        case "maybe":     return .orange
-        case "not_going": return .red
-        default:          return Color.yaplyAccent
+// Tinted icon + text, like the landing card's meta row.
+private struct PlanMetaLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 7) {
+            configuration.icon
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(PlanStyle.sky)
+            configuration.title
         }
     }
 }

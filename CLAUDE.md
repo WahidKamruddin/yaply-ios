@@ -396,6 +396,7 @@ GIPHY_API_KEY = your-giphy-key
   `/album` `/budget` `/event` `/plan` insert, `ChatView` posts
   `Notification.Name.yaplyItemCreated` (defined in `Core/Extensions/String+Utils.swift`)
   with `userInfo["type"]`; each list view `.onReceive`s it and reloads on match.
+- **Plan UI** (`Features/Events/Views/PlanStyle.swift`): shared badge/pill/glow/faces pieces mirroring web's `.plan-*` CSS, and `BestSlot` — the best-slot rule in `../CLAUDE.md` (Feature Map → Plan UI), which must match web's `bestSlot.ts`.
 - **Events availability slot keys** are UTC ISO strings (`"2025-06-10T13:00:00.000Z"`)
   built from local-time `Date`s via `ISO8601DateFormatter` with `timeZone = UTC` and
   `.withFractionalSeconds`, 8am–10pm local in 30-min rows — must match web or the
