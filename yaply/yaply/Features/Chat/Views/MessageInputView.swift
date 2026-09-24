@@ -145,6 +145,8 @@ struct MessageInputView: View {
                             .frame(width: 30, height: 36)
                             .contentShape(Rectangle())
                     }
+                    .buttonStyle(YaplyPressStyle())
+                    .accessibilityLabel(menuExpanded ? "Hide attachment options" : "Show attachment options")
                     .disabled(disabled)
                 }
 
@@ -206,6 +208,8 @@ struct MessageInputView: View {
                                 .font(.system(size: 18))
                                 .foregroundStyle(Color.yaplySecondary)
                         }
+                        .buttonStyle(YaplyPressStyle())
+                        .accessibilityLabel("Emoji and GIFs")
                         .disabled(disabled)
                     }
                 }
@@ -217,6 +221,7 @@ struct MessageInputView: View {
 
                 Button(action: {
                     guard !text.isBlank else { return }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     onSend()
                 }) {
                     Image(systemName: "message.fill")
@@ -227,8 +232,10 @@ struct MessageInputView: View {
                         .clipShape(Circle())
                         .frame(height: 38, alignment: .center)
                 }
+                .buttonStyle(YaplyPressStyle())
+                .accessibilityLabel("Send message")
                 .disabled(text.isBlank || disabled)
-                .animation(.easeInOut(duration: 0.15), value: text.isBlank)
+                .yaplyAnimation(.easeInOut(duration: 0.15), value: text.isBlank)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
