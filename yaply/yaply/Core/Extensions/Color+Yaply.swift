@@ -90,14 +90,16 @@ extension Color {
         light: Color(red: 0.863, green: 0.906, blue: 0.973),
         dark: Color(red: 0.561, green: 0.722, blue: 1.0).opacity(0.16)
     )
-    // #9ab0cc / #5c718f — secondary text, icons ("faint")
+    // #8299b8 / #5f7396 — secondary text, icons ("faint"). Darkened from
+    // #9ab0cc / #5c718f to clear ~3:1 on small text; matches web's --faint.
     static let yaplySecondary = Color(
-        light: Color(red: 0.604, green: 0.690, blue: 0.800),
-        dark: Color(red: 0.361, green: 0.443, blue: 0.561)
+        light: Color(red: 0.510, green: 0.600, blue: 0.722),
+        dark: Color(red: 0.373, green: 0.451, blue: 0.588)
     )
-    // #6b84ab / #8ba1c7 — tertiary text ("dim")
+    // #5a7399 / #8ba1c7 — tertiary text ("dim"). Light darkened from #6b84ab
+    // to match web's --dim.
     static let yaplyTertiary = Color(
-        light: Color(red: 0.420, green: 0.518, blue: 0.671),
+        light: Color(red: 0.353, green: 0.451, blue: 0.600),
         dark: Color(red: 0.545, green: 0.631, blue: 0.780)
     )
     // #ef4444 / #ff8080 — destructive actions
