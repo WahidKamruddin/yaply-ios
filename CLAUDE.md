@@ -57,7 +57,8 @@ these are the CryptoKit-specific rules that must not drift:
   100) and applies the same candidate-preference rule as the single-message form;
   `EnvelopeEncryption.open(envelope:...)` is the pure unwrap both paths share.
   `ChatViewModel.decryptAll` awaits registration **once**, resolves candidate
-  fingerprints **once**, then unwraps in memory. It used to be a serial loop of 50
+  fingerprints **once**, then unwraps off the main actor (`EnvelopeEncryption.unwrap`, keys resolved
+  first because `KeyStore`'s cache is main-actor state). It used to be a serial loop of 50
   round-trips plus ~100 Keychain reads per page. Failure semantics are unchanged:
   no envelope on an `enc_v = 2` message is still a permanent, honest failure.
 - **Editing (contract only, no UI):** re-seal with a new message key and replace all
@@ -268,13 +269,19 @@ from `currentScope()`; `refresh` rebuilds the channel (with a catch-up) whenever
 conversation or member set changes, and message inserts refetch through a 250ms
 debounce. Previews and unread counts come from `get_conversation_summaries`, and v2
 previews decrypt through one batched envelope query — a failure previews as
-"🔒 Encrypted message", never ciphertext. `ChatViewModel`'s `profiles` binding is
-still unfiltered (members load concurrently with the join).
+"🔒 Encrypted message", never ciphertext. `ChatViewModel` hears presence on its own
+non-critical `chat-presence-…` channel filtered to the members, started inside the
+realtime group once they've loaded — never an unfiltered `profiles` binding.
 
 **Per-subscriber catch-up:** `ConversationListViewModel` → `refresh` +
 `refreshFriendRequestCount`; `ChatViewModel` → `mergeLatestMessages` + pins +
 reactions + read status + request state; `ThreadViewModel` → `load()`;
 `FriendsViewModel` → `loadAll(showSpinner: false)`; `PresenceService` → `goOnline`.
+
+**History trimming:** `LazyVStack` never releases built rows, so when the user is back
+near the bottom `ChatView` calls `trimHistoryIfNeeded()` — past 250 loaded messages it
+keeps the newest 150, resets `nextCursor` to the oldest kept one (`hasMore = true`) and
+re-pins to the bottom. Scrolling up reloads the dropped pages.
 
 `ChatViewModel.mergeLatestMessages` **merges** the newest page by id rather than
 replacing `messages`, leaving `nextCursor`/`hasMore` alone — that preserves pages

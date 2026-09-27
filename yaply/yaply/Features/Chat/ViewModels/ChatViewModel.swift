@@ -73,6 +73,7 @@ final class ChatViewModel {
     private var realtimeTask: Task<Void, Never>?
     private var pgChannel: RealtimeChannelV2?
     private var typingChannel: RealtimeChannelV2?
+    private var presenceChannel: RealtimeChannelV2?
     private var typingTimers: [String: Task<Void, Never>] = [:]
     private var reconnectToken: UUID?
     private var isTyping = false
@@ -172,6 +173,32 @@ final class ChatViewModel {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    /// Messages kept once the user is back at the bottom, and the count that
+    /// triggers a trim. The gap stops a user hovering near the bottom from
+    /// trimming on every page.
+    private static let retainedMessageCount = 150
+    private static let trimThreshold = 250
+
+    /// Drops loaded history above the newest `retainedMessageCount` messages.
+    /// `LazyVStack` never releases a row once built, so every page scrolled into
+    /// view — and every image in it — stayed in memory for the life of the chat.
+    /// Pagination resumes from the oldest kept message, so scrolling up reloads
+    /// what was dropped. Call only while the user is at the bottom, where the
+    /// removed rows are far off screen. Returns whether anything was trimmed.
+    @discardableResult
+    func trimHistoryIfNeeded() -> Bool {
+        guard messages.count > Self.trimThreshold, !isLoadingOlder else { return false }
+        let kept = Array(messages.suffix(Self.retainedMessageCount))
+        guard let oldestKept = kept.first else { return false }
+        let dropped = Set(messages.prefix(messages.count - kept.count).map(\.id))
+        messages = kept
+        reactionsMap = reactionsMap.filter { !dropped.contains($0.key) }
+        readByOtherSet.subtract(dropped)
+        nextCursor = oldestKept.createdAt
+        hasMore = true
+        return true
     }
 
     private func loadReactions() async {
@@ -678,6 +705,7 @@ final class ChatViewModel {
         realtimeTask?.cancel()
         RealtimeConnectionMonitor.remove(pgChannel); pgChannel = nil
         RealtimeConnectionMonitor.remove(typingChannel); typingChannel = nil
+        RealtimeConnectionMonitor.remove(presenceChannel); presenceChannel = nil
 
         let label = "chat-\(conversationId.uuidString)"
         if reconnectToken == nil {
@@ -706,7 +734,6 @@ final class ChatViewModel {
             )
             let pinDeletes = pg.postgresChange(DeleteAction.self, schema: "public", table: "pinned_messages")
             let readInserts = pg.postgresChange(InsertAction.self, schema: "public", table: "message_reads")
-            let profileUpdates = pg.postgresChange(UpdateAction.self, schema: "public", table: "profiles")
             await RealtimeConnectionMonitor.subscribe(pg, label: label)
 
             // Catch up *after* the subscription is live, never before: an event landing
@@ -779,8 +806,8 @@ final class ChatViewModel {
                 group.addTask {
                     for await event in readInserts { await self.applyReadReceipt(event.record) }
                 }
-                group.addTask { for await event in profileUpdates { await self.handleProfileUpdate(event.record) } }
                 group.addTask { await self.runTypingChannel() }
+                group.addTask { await self.runPresenceChannel() }
             }
         }
     }
@@ -802,6 +829,26 @@ final class ChatViewModel {
         for await payload in typingStream { await handleTyping(payload) }
     }
 
+    // The header's online/offline state, filtered to this conversation's other
+    // members. It used to be an unfiltered `profiles` binding on the main channel,
+    // so every presence heartbeat in the database reached every open chat. A
+    // separate channel because the members are only known once the first load
+    // has finished, and the main channel joins before that. Non-critical, like
+    // typing: a failure here must never hold up message delivery.
+    private func runPresenceChannel() async {
+        let memberIds = conversationMembers.map(\.userId).filter { $0 != currentUserId }
+        guard !memberIds.isEmpty, memberIds.count <= 100 else { return }
+        let ch = await RealtimeConnectionMonitor.channel("chat-presence-\(conversationId.uuidString)-\(UUID().uuidString)")
+        guard !Task.isCancelled else { RealtimeConnectionMonitor.remove(ch); return }
+        presenceChannel = ch
+        let updates = ch.postgresChange(
+            UpdateAction.self, schema: "public", table: "profiles",
+            filter: .in("id", values: memberIds)
+        )
+        await RealtimeConnectionMonitor.subscribe(ch, label: "chat-presence-\(conversationId.uuidString)", critical: false)
+        for await event in updates { await handleProfileUpdate(event.record) }
+    }
+
     func stopRealtime() {
         RealtimeConnectionMonitor.shared.unregister(reconnectToken)
         reconnectToken = nil
@@ -809,6 +856,7 @@ final class ChatViewModel {
         realtimeTask = nil
         RealtimeConnectionMonitor.remove(pgChannel); pgChannel = nil
         RealtimeConnectionMonitor.remove(typingChannel); typingChannel = nil
+        RealtimeConnectionMonitor.remove(presenceChannel); presenceChannel = nil
     }
 
     // Everything that could have changed while the socket was down. Resubscribing alone
@@ -1121,10 +1169,33 @@ final class ChatViewModel {
             )) ?? [:]
         }
 
+        // Key lookup touches KeyStore's cache, so it stays here; the ECDH + AES
+        // work for the whole page then runs off the main actor, where it used to
+        // compete with laying out the rows it was producing.
+        var keys: [String: P256.KeyAgreement.PrivateKey] = [:]
+        for fp in Set(envelopes.values.map(\.recipientFp)) {
+            keys[fp] = KeyStore.privateKey(forFingerprint: fp, userId: currentUserId)
+        }
+        let jobs: [(id: UUID, envelope: MessageEnvelope, content: String, iv: String, key: P256.KeyAgreement.PrivateKey)] =
+            v2.compactMap { msg in
+                guard let iv = msg.iv, let envelope = envelopes[msg.id], let key = keys[envelope.recipientFp]
+                else { return nil }
+                return (msg.id, envelope, msg.content, iv, key)
+            }
+        let plaintexts: [UUID: String] = jobs.isEmpty ? [:] : await Task.detached(priority: .userInitiated) {
+            var out: [UUID: String] = [:]
+            for job in jobs {
+                if let text = EnvelopeEncryption.unwrap(
+                    envelope: job.envelope, content: job.content, iv: job.iv, privateKey: job.key
+                ) { out[job.id] = text }
+            }
+            return out
+        }.value
+
         var result: [DecryptedMessage] = []
         result.reserveCapacity(ordered.count)
         for msg in ordered {
-            let (content, failed) = decryptDbMessage(msg, envelope: envelopes[msg.id])
+            let (content, failed) = decryptDbMessage(msg, plaintext: plaintexts[msg.id])
             result.append(DecryptedMessage(
                 id: msg.id, conversationId: msg.conversationId, senderId: msg.senderId,
                 content: content, type: msg.type, mediaUrl: msg.mediaUrl,
@@ -1136,18 +1207,16 @@ final class ChatViewModel {
         return result
     }
 
-    // Batch form of `decryptDbMessage`, against an already-fetched envelope.
-    // Same branch order and same failure semantics; no envelope for an enc_v=2
-    // message is a permanent, honest failure, never a fall-through.
+    // Batch form of `decryptDbMessage`, against a plaintext already unwrapped in
+    // `decryptAll`. Same branch order and failure semantics: no plaintext for an
+    // enc_v=2 message (no envelope, no key, bad wrap) is a permanent, honest
+    // failure, never a fall-through.
     private func decryptDbMessage(
         _ msg: DbMessage,
-        envelope: MessageEnvelope?
+        plaintext: String?
     ) -> (content: String, failed: Bool) {
         if msg.encV == 2 {
-            guard let iv = msg.iv, let envelope else { return ("", true) }
-            guard let plaintext = EnvelopeEncryption.open(
-                envelope: envelope, content: msg.content, iv: iv, userId: currentUserId
-            ) else { return ("", true) }
+            guard msg.iv != nil, let plaintext else { return ("", true) }
             return (plaintext, false)
         } else if msg.encV == nil && msg.iv == nil {
             return (EncryptionService.decryptLegacy(msg.content) ?? msg.content, false)

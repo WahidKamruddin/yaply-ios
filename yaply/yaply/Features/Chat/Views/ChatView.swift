@@ -217,7 +217,14 @@ struct ChatView: View {
                         return max(0, distance) <= max(1, geo.containerSize.height)
                     } action: { _, nearBottom in
                         isNearBottom = nearBottom
-                        if nearBottom { newMsgCount = 0 }
+                        if nearBottom {
+                            newMsgCount = 0
+                            // Back at the bottom: release history far above the
+                            // viewport, then re-pin so the removal can't shift it.
+                            if vm.trimHistoryIfNeeded() {
+                                proxy.scrollTo("bottom", anchor: .bottom)
+                            }
+                        }
                     }
                     .overlay(alignment: .bottomTrailing) {
                         if showScrollButton {

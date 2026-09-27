@@ -93,6 +93,18 @@ enum EnvelopeEncryption {
         guard let privateKey = KeyStore.privateKey(forFingerprint: envelope.recipientFp, userId: userId) else {
             return nil
         }
+        return unwrap(envelope: envelope, content: content, iv: iv, privateKey: privateKey)
+    }
+
+    /// The pure crypto half of `open`, with the private key already resolved —
+    /// safe off the main actor, so a page's worth of ECDH unwraps can run in the
+    /// background. Same failure semantics: nil is a permanent, honest failure.
+    nonisolated static func unwrap(
+        envelope: MessageEnvelope,
+        content: String,
+        iv: String,
+        privateKey: P256.KeyAgreement.PrivateKey
+    ) -> String? {
         guard
             let ephPubJWK = try? EncryptionService.jwkFromJSONString(envelope.ephPub),
             let mk = try? EncryptionService.unwrapKey(

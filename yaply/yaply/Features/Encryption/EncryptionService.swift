@@ -14,7 +14,7 @@ import Foundation
 //     key_iv     = base64( nonce[12] ) for that wrap
 //
 // Key derivation throughout this file: raw ECDH shared secret → SymmetricKey, never HKDF.
-enum EncryptionService {
+nonisolated enum EncryptionService {
 
     enum Error: Swift.Error {
         case invalidJWK
