@@ -70,6 +70,9 @@ struct ConversationRowView: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 16)
         .background(.clear)
+        // Whole row is the tap target, not just the avatar and text: a clear
+        // background isn't hit-testable, so the gaps and trailing space ignored taps.
+        .contentShape(Rectangle())
     }
 }
 
