@@ -499,11 +499,15 @@ rail floats above and the action card below; the group only shifts vertically
   (back). Translate is deliberately absent. Delete routes to `ChatView`'s
   `yaplyConfirm`; Copy puts `message.content` (or media URL) on `UIPasteboard`.
 
+The timestamp swipe lives in `SwipeRevealState` (a reference, read only by
+`SwipeRevealRow`), never as a value on `MessageBubbleView` — as a value it had to
+be part of `==`, so every drag frame rebuilt every visible bubble.
+
 **Grouped runs:** `BubblePosition.positions(for:)` (per date group) feeds `MessageBubbleView.groupPosition`, `BubbleShape` and `BubbleContentView.position`; `ChatView` stores `actionsPosition` so the long-press copy keeps the grouped corners. Rule in `../CLAUDE.md`.
 
 `MessageBubbleView` no longer uses `.contextMenu` at all. Other gestures: swipe
-right on a bubble = reply; swipe left on own bubble reveals the timestamp
-(`ChatView` owns a single `swipeOffset` so only one shows).
+right on any bubble, own included, = reply; swipe left reveals timestamps
+(`ChatView` owns a single `SwipeRevealState` so only one shows).
 
 ---
 
@@ -566,8 +570,13 @@ opening the public media URL. Web renders a download link.
 
 ## Media: GIFs & Stickers
 
-GIFs send `type:"gif"` with the Giphy URL (hot-linked); photos compress to JPEG as
-`type:"image"`. All media is a plain `MessageRepository.sendMessage` insert —
+GIFs send `type:"gif"` with the Giphy **`downsized`** URL (hot-linked, matching web —
+`original` can be many MB) plus an `#ar=` hint from Giphy's reported size; photos
+compress to JPEG as `type:"image"` and render optimistically from the encoded bytes
+(seeded into Kingfisher under a `yaply-local://` key) while they upload.
+`AnimatedGifView` reserves its aspect ratio up front and loads with
+`.loadDiskFileSynchronously(false)` — KFAnimatedImage's default reads cached GIFs on
+the main thread. All media is a plain `MessageRepository.sendMessage` insert —
 `content:""`, `iv:nil`, `enc_v` NULL — **never** the envelope RPC.
 
 **Animated playback:** `gif`/`sticker` via Kingfisher `KFAnimatedImage`; stills via

@@ -23,7 +23,8 @@ struct ChatView: View {
     @State private var searchIsActive = false
     @State private var searchQuery = ""
     @State private var showGroupInfo = false
-    @State private var swipeOffset: CGFloat = 0
+    /// Not read by this view's body, so the timestamp drag doesn't re-evaluate it.
+    @State private var swipe = SwipeRevealState()
     // Derived directly in `onScrollGeometryChange` rather than storing the raw
     // offsets: the old version wrote two continuous CGFloats into @State on
     // every scroll tick, which re-evaluated this whole body ~60x a second.
@@ -256,11 +257,11 @@ struct ChatView: View {
                                 let dx = value.translation.width
                                 let dy = value.translation.height
                                 guard abs(dx) > abs(dy) else { return }
-                                swipeOffset = max(-65, min(0, dx))
+                                swipe.offset = max(-65, min(0, dx))
                             }
                             .onEnded { _ in
                                 withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                                    swipeOffset = 0
+                                    swipe.offset = 0
                                 }
                             }
                     )
@@ -532,7 +533,8 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showExpression) {
             ExpressionPickerSheet(onGifSelected: { gif in
-                Task { await vm.sendGifMessage(url: gif.url) }
+                let url = MediaAspectRatio.annotate(gif.url, pixelSize: gif.pixelSize)
+                Task { await vm.sendGifMessage(url: url) }
             })
         }
         .fullScreenCover(isPresented: $showCamera) {
@@ -761,15 +763,19 @@ struct ChatView: View {
             showsSenderName: vm.isGroupConversation,
             startsNewSpeaker: startsNewSpeaker,
             mentionMembers: vm.isGroupConversation ? vm.conversationMembers : [],
-            swipeOffset: swipeOffset
+            swipe: swipe
         )
         // Gated on the == above, so a ChatView re-evaluation no longer forces
         // every visible bubble to rebuild its body.
         .equatable()
         .opacity(actionsMessage?.id == msg.id ? 0 : 1)
         .id(msg.id)
-        .background(highlightedId == msg.id ? Color.yaplyAccent.opacity(0.12) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        // The highlight is a rounded background, not a clip: clipping every row
+        // just for this cost an offscreen mask pass per row, image rows included.
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(highlightedId == msg.id ? Color.yaplyAccent.opacity(0.12) : Color.clear)
+        )
         .animation(.easeInOut(duration: 0.3), value: highlightedId)
         .transition(.asymmetric(
             insertion: .move(edge: .bottom).combined(with: .opacity),

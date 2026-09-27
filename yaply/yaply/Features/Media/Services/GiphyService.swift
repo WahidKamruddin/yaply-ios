@@ -1,10 +1,17 @@
+import CoreGraphics
 import Foundation
 
 // Mirrors src/features/media/api/gifs.ts — direct Giphy REST API, no SDK
 struct GiphyGif: Identifiable, Decodable {
     let id: String
+    /// The `downsized` rendition (≤2MB), matching web. This used to be
+    /// `original`, which can be many MB with full-size frames — heavy to
+    /// download and animate for every recipient.
     let url: String
     let previewUrl: String
+    /// Pixel size of `url`'s rendition, when Giphy reports it — sent as the
+    /// `#ar=` hint so the bubble reserves its final height before loading.
+    let pixelSize: CGSize
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -13,12 +20,15 @@ struct GiphyGif: Identifiable, Decodable {
 
     enum ImageKeys: String, CodingKey {
         case original
+        case downsized
         case fixedWidth = "fixed_width"
     }
 
     enum UrlKeys: String, CodingKey {
         case url
         case mp4
+        case width
+        case height
     }
 
     init(from decoder: Decoder) throws {
@@ -26,7 +36,18 @@ struct GiphyGif: Identifiable, Decodable {
         id = try container.decode(String.self, forKey: .id)
         let images = try container.nestedContainer(keyedBy: ImageKeys.self, forKey: .images)
         let original = try images.nestedContainer(keyedBy: UrlKeys.self, forKey: .original)
-        url = try original.decode(String.self, forKey: .url)
+        let downsized = try? images.nestedContainer(keyedBy: UrlKeys.self, forKey: .downsized)
+        let chosen: KeyedDecodingContainer<UrlKeys>
+        if let downsized, (try? downsized.decode(String.self, forKey: .url)) != nil {
+            chosen = downsized
+        } else {
+            chosen = original
+        }
+        url = try chosen.decode(String.self, forKey: .url)
+        // Giphy sends dimensions as strings.
+        let width = (try? chosen.decode(String.self, forKey: .width)).flatMap(Double.init) ?? 0
+        let height = (try? chosen.decode(String.self, forKey: .height)).flatMap(Double.init) ?? 0
+        pixelSize = CGSize(width: width, height: height)
         let preview = try images.nestedContainer(keyedBy: UrlKeys.self, forKey: .fixedWidth)
         previewUrl = (try? preview.decode(String.self, forKey: .url)) ?? url
     }

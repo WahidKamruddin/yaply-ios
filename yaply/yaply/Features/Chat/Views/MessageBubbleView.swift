@@ -88,7 +88,6 @@ struct MessageBubbleView: View, Equatable {
             && lhs.showsSenderName == rhs.showsSenderName
             && lhs.startsNewSpeaker == rhs.startsNewSpeaker
             && lhs.mentionMembers == rhs.mentionMembers
-            && lhs.swipeOffset == rhs.swipeOffset
     }
 
     let message: DecryptedMessage
@@ -125,7 +124,10 @@ struct MessageBubbleView: View, Equatable {
     /// (DMs, threads that don't pass it) just renders content as plain text.
     var mentionMembers: [MemberSummary] = []
 
-    var swipeOffset: CGFloat = 0
+    /// Shared timestamp-reveal drag. A reference rather than a value on purpose:
+    /// as a value it had to be part of `==`, so every drag frame counted as a
+    /// change and rebuilt every visible bubble. Only `SwipeRevealRow` reads it.
+    var swipe: SwipeRevealState?
 
     @State private var replyDragOffset: CGFloat = 0
     @State private var hasTriggeredReply = false
@@ -146,16 +148,7 @@ struct MessageBubbleView: View, Equatable {
             if message.type == "system" {
                 systemMessageView
             } else {
-                ZStack(alignment: .trailing) {
-                    Text(message.createdAt.timeOnly)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.yaplySecondary)
-                        .padding(.trailing, 16)
-                        .opacity(Double(min(1, abs(swipeOffset) / 50)))
-
-                    mainRow
-                        .offset(x: swipeOffset)
-                }
+                SwipeRevealRow(state: swipe, time: message.createdAt.timeOnly, content: mainRow)
             }
         }
     }
@@ -260,14 +253,14 @@ struct MessageBubbleView: View, Equatable {
 
             // ZStack lets the reply icon sit behind the bubble column.
             // As the VStack shifts right, the icon is revealed at the leading edge.
+            // Own messages too: the column hugs the bubble, so the icon appears
+            // just left of it while the bubble slides toward the screen edge.
             ZStack(alignment: .leading) {
-                if !isOwn {
-                    Image(systemName: "arrowshape.turn.up.left.fill")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.yaplyAccent)
-                        .opacity(Double(min(1, replyDragOffset / 50)))
-                        .scaleEffect(min(1.0, max(0.4, replyDragOffset / 50)))
-                }
+                Image(systemName: "arrowshape.turn.up.left.fill")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Color.yaplyAccent)
+                    .opacity(Double(min(1, replyDragOffset / 50)))
+                    .scaleEffect(min(1.0, max(0.4, replyDragOffset / 50)))
 
                 VStack(alignment: isOwn ? .trailing : .leading, spacing: 4) {
                     if !isOwn, showsSenderName, groupPosition.showsName, let profile = message.senderProfile {
@@ -328,11 +321,11 @@ struct MessageBubbleView: View, Equatable {
                     }
                 )
                 .onPreferenceChange(ReplyAvailableWidthKey.self) { replyAvailableWidth = $0 }
-                .offset(x: !isOwn ? replyDragOffset : 0)
+                .offset(x: replyDragOffset)
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 10)
                         .onChanged { value in
-                            guard !isOwn, !message.isDeleted else { return }
+                            guard !message.isDeleted else { return }
                             let dx = value.translation.width
                             let dy = value.translation.height
                             guard abs(dx) > abs(dy), dx > 0 else { return }
@@ -343,7 +336,6 @@ struct MessageBubbleView: View, Equatable {
                             }
                         }
                         .onEnded { _ in
-                            guard !isOwn else { return }
                             hasTriggeredReply = false
                             withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
                                 replyDragOffset = 0
@@ -789,6 +781,38 @@ struct BubbleContentView: View {
     }
 }
 
+// MARK: - Timestamp swipe
+
+/// The horizontal drag on the message list that slides rows left to reveal
+/// their send times. Written by `ChatView`'s gesture, read only by
+/// `SwipeRevealRow` — neither `ChatView` nor the bubble bodies observe it.
+@Observable
+final class SwipeRevealState {
+    var offset: CGFloat = 0
+}
+
+/// Applies the swipe to an already-built row. `content` is a stored value, so a
+/// drag frame re-evaluates only this small body, not the bubble that built it.
+private struct SwipeRevealRow<Content: View>: View {
+    let state: SwipeRevealState?
+    let time: String
+    let content: Content
+
+    var body: some View {
+        let offset = state?.offset ?? 0
+        ZStack(alignment: .trailing) {
+            Text(time)
+                .font(.system(size: 11))
+                .foregroundStyle(Color.yaplySecondary)
+                .padding(.trailing, 16)
+                .opacity(Double(min(1, abs(offset) / 50)))
+
+            content
+                .offset(x: offset)
+        }
+    }
+}
+
 // MARK: - Animated GIF
 
 /// A bubble-free animated GIF that sizes to the GIF's own aspect ratio (like the
@@ -796,24 +820,38 @@ struct BubbleContentView: View {
 /// hug the content instead of a fixed letterboxed box.
 private struct AnimatedGifView: View {
     let url: URL
+    /// Reserved up front from the `#ar=` hint or a ratio learned earlier this
+    /// session, so the row is laid out at its final height before the GIF loads
+    /// instead of starting square and shoving the list when it decodes.
     @State private var aspect: CGFloat?
+
+    init(url: URL) {
+        self.url = url
+        _aspect = State(initialValue: MediaAspectRatio.known(for: url.absoluteString))
+    }
 
     var body: some View {
         KFAnimatedImage(url)
             .configure { $0.contentMode = .scaleAspectFill }
+            // KFAnimatedImage reads disk-cached files synchronously by default —
+            // a multi-MB GIF read on the main thread each time a row scrolls in.
+            // The reserved aspect ratio means the async load can't cause a jump.
+            .loadDiskFileSynchronously(false)
+            .purgeFramesOnBackground()
             .onSuccess { result in
                 let s = result.image.size
-                if s.width > 0, s.height > 0 { aspect = s.width / s.height }
+                guard s.width > 0, s.height > 0 else { return }
+                MediaAspectRatio.remember(url.absoluteString, size: s)
+                if aspect == nil { aspect = MediaAspectRatio.clamp(s.width / s.height) }
             }
             .placeholder {
                 ZStack {
                     RoundedRectangle(cornerRadius: 14).fill(Color.yaplyBackground)
                     ProgressView().tint(Color.yaplyAccent)
                 }
-                .frame(width: 180, height: 140)
             }
             .fade(duration: 0.15)
-            .aspectRatio(aspect ?? 1, contentMode: .fit)
+            .aspectRatio(aspect ?? MediaAspectRatio.unknown, contentMode: .fit)
             .frame(maxWidth: 240, maxHeight: 300)
             .clipShape(RoundedRectangle(cornerRadius: 14))
     }

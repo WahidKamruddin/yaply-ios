@@ -385,6 +385,19 @@ final class ChatViewModel {
     func sendImageMessage(imageData: Data, mimeType: String, pixelSize: CGSize = .zero) async {
         isSending = true
         defer { isSending = false }
+
+        // Optimistic: the bubble used to appear only after the upload and the
+        // insert both finished, so a photo looked like it sent seconds late. The
+        // temp bubble draws the bytes we already hold, under a local key that
+        // never reaches the network, at its final aspect ratio.
+        let tempId = UUID()
+        let localKey = MediaAspectRatio.annotate("yaply-local://image/\(tempId.uuidString)", pixelSize: pixelSize)
+        Self.seedImageCache(imageData, forKey: localKey)
+        messages.append(DecryptedMessage(
+            id: tempId, conversationId: conversationId, senderId: currentUserId,
+            content: "", type: "image", mediaUrl: localKey, createdAt: Date()
+        ))
+
         do {
             let uploaded = try await uploadService.uploadImage(imageData, mimeType: mimeType, userId: currentUserId)
             let url = MediaAspectRatio.annotate(uploaded, pixelSize: pixelSize)
@@ -397,13 +410,22 @@ final class ChatViewModel {
                 content: "", iv: nil, type: "image", mediaUrl: url, mediaMime: mimeType
             )
             let sent = try await repository.sendMessage(params)
-            messages.append(DecryptedMessage(
+            let confirmed = DecryptedMessage(
                 id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
                 content: "", type: "image", mediaUrl: url, createdAt: sent.createdAt
-            ))
+            )
+            if messages.contains(where: { $0.id == sent.id }) {
+                messages.removeAll { $0.id == tempId }
+            } else if let idx = messages.firstIndex(where: { $0.id == tempId }) {
+                messages[idx] = confirmed
+            } else {
+                messages.append(confirmed)
+            }
         } catch {
+            messages.removeAll { $0.id == tempId }
             self.error = error.localizedDescription
         }
+        try? await ImageCache.default.removeImage(forKey: localKey)
     }
 
     /// Puts freshly uploaded bytes into Kingfisher's cache under the URL the
@@ -729,16 +751,18 @@ final class ChatViewModel {
                 // entire database arrives here. Each one used to trigger a full
                 // refetch for every loaded message id. Gate on whether the row
                 // even refers to a message this conversation has loaded.
+                // Refetch only the message the event names — this used to refetch
+                // reactions for every loaded message id on every event.
                 group.addTask {
-                    for await event in reactionInserts
-                    where await self.isLoadedMessage(event.record) {
-                        await self.loadReactionsForCurrentMessages()
+                    for await event in reactionInserts {
+                        guard let id = await self.loadedMessageId(event.record) else { continue }
+                        await self.reloadReactions(for: id)
                     }
                 }
                 group.addTask {
-                    for await event in reactionDeletes
-                    where await self.isLoadedMessage(event.oldRecord) {
-                        await self.loadReactionsForCurrentMessages()
+                    for await event in reactionDeletes {
+                        guard let id = await self.loadedMessageId(event.oldRecord) else { continue }
+                        await self.reloadReactions(for: id)
                     }
                 }
                 group.addTask { for await _ in pinInserts { await self.loadPins() } }
@@ -750,11 +774,10 @@ final class ChatViewModel {
                         await self.loadPins()
                     }
                 }
+                // The insert itself says who read what, so it's applied in place
+                // rather than re-querying read status for every own message.
                 group.addTask {
-                    for await event in readInserts
-                    where await self.isLoadedMessage(event.record) {
-                        await self.fetchReadStatus()
-                    }
+                    for await event in readInserts { await self.applyReadReceipt(event.record) }
                 }
                 group.addTask { for await event in profileUpdates { await self.handleProfileUpdate(event.record) } }
                 group.addTask { await self.runTypingChannel() }
@@ -1004,14 +1027,32 @@ final class ChatViewModel {
 
     // Keeps the in-chat "Online"/"Offline" header live — patches just the changed
     // member's profile in place rather than re-fetching the whole conversation.
-    /// True when a realtime row refers to a message currently loaded here.
-    /// O(1) against the reply index the layout already maintains.
-    private func isLoadedMessage(_ record: [String: AnyJSON]) -> Bool {
+    /// The `message_id` of a realtime row, when it refers to a message currently
+    /// loaded here. O(1) against the index the layout already maintains.
+    private func loadedMessageId(_ record: [String: AnyJSON]) -> UUID? {
         guard
             let raw = record["message_id"]?.stringValue,
-            let id = UUID(uuidString: raw)
-        else { return false }
-        return layout.messagesById[id] != nil
+            let id = UUID(uuidString: raw),
+            layout.messagesById[id] != nil
+        else { return nil }
+        return id
+    }
+
+    private func reloadReactions(for messageId: UUID) async {
+        guard let rows = try? await repository.fetchReactions(messageIds: [messageId]) else { return }
+        reactionsMap[messageId] = buildReactionGroups(from: rows)[messageId]
+    }
+
+    /// `readByOtherSet` holds own messages someone else has read, so only a
+    /// receipt from another user on one of our loaded messages changes it.
+    private func applyReadReceipt(_ record: [String: AnyJSON]) {
+        guard
+            let id = loadedMessageId(record),
+            let reader = record["user_id"]?.stringValue.flatMap(UUID.init(uuidString:)),
+            reader != currentUserId,
+            layout.messagesById[id]?.senderId == currentUserId
+        else { return }
+        readByOtherSet.insert(id)
     }
 
     private func handleProfileUpdate(_ record: [String: AnyJSON]) async {
