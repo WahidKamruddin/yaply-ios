@@ -726,7 +726,13 @@ final class ChatViewModel {
                 UpdateAction.self, schema: "public", table: "messages",
                 filter: .eq("conversation_id", value: conversationId.uuidString)
             )
-            let reactionInserts = pg.postgresChange(InsertAction.self, schema: "public", table: "message_reactions")
+            // Filtered server-side by message_reactions.conversation_id (migration
+            // 20260927000002). Deletes can't be filtered by Realtime, so they stay
+            // unfiltered and are matched against the loaded messages below.
+            let reactionInserts = pg.postgresChange(
+                InsertAction.self, schema: "public", table: "message_reactions",
+                filter: .eq("conversation_id", value: conversationId.uuidString)
+            )
             let reactionDeletes = pg.postgresChange(DeleteAction.self, schema: "public", table: "message_reactions")
             let pinInserts = pg.postgresChange(
                 InsertAction.self, schema: "public", table: "pinned_messages",
@@ -772,14 +778,11 @@ final class ChatViewModel {
                         await self.handleMessageUpdate(event.record)
                     }
                 }
-                // `message_reactions` and `message_reads` have no
-                // conversation_id, so these subscriptions cannot be filtered
-                // server-side -- every reaction and every read receipt in the
-                // entire database arrives here. Each one used to trigger a full
-                // refetch for every loaded message id. Gate on whether the row
-                // even refers to a message this conversation has loaded.
-                // Refetch only the message the event names — this used to refetch
-                // reactions for every loaded message id on every event.
+                // `message_reads` has no conversation_id and reaction deletes
+                // can't be filtered, so those arrive for the whole database and
+                // are gated on the row naming a loaded message. Only that one
+                // message is refetched — every event used to refetch reactions
+                // for every loaded message id.
                 group.addTask {
                     for await event in reactionInserts {
                         guard let id = await self.loadedMessageId(event.record) else { continue }
