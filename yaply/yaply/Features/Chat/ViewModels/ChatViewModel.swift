@@ -1090,7 +1090,7 @@ final class ChatViewModel {
         f.formatOptions = [.withInternetDateTime]
         return f
     }()
-    private static func parseRealtimeDate(_ str: String) -> Date? {
+    static func parseRealtimeDate(_ str: String) -> Date? {
         _dateParserFull.date(from: str) ?? _dateParserPlain.date(from: str)
     }
 

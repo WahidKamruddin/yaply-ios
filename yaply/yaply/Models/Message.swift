@@ -125,6 +125,8 @@ struct DecryptedMessage: Identifiable, Hashable {
         // they're checked before the deleted state.
         if type == "system" { return SystemItem.previewText(content) }
         if isDeleted { return "Message deleted" }
+        // Never ciphertext: an envelope this device can't open previews honestly.
+        if decryptFailed { return "🔒 Encrypted message" }
         switch type {
         case "sticker": return "Sticker"
         case "gif": return "GIF"

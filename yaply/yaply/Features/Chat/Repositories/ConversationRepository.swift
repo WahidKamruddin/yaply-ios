@@ -50,7 +50,9 @@ final class ConversationRepository {
             }
         }
 
-        let memberships: [MembershipRow] = try await supabase
+        // Both queries run concurrently: memberships (with member profiles) and
+        // the per-conversation last message + unread counts.
+        async let membershipsQuery: [MembershipRow] = supabase
             .from("conversation_members")
             .select("""
                 last_read_at,
@@ -76,104 +78,34 @@ final class ConversationRepository {
             .execute()
             .value
 
-        let convIds = memberships.compactMap { $0.conversations?.id.uuidString }
+        async let summariesQuery: [ConversationSummaryRow] = supabase
+            .rpc("get_conversation_summaries")
+            .execute()
+            .value
+        let (memberships, summaries) = try await (membershipsQuery, summariesQuery)
 
-        struct LastMsgRow: Decodable, Identifiable {
-            let id: UUID
-            let conversationId: UUID
-            let senderId: UUID?
-            let content: String
-            let iv: String?
-            let type: String
-            let deletedAt: Date?
-            let createdAt: Date
-            var mentionedUserIds: [UUID] = []
-            var mentionsEveryone: Bool = false
-
-            enum CodingKeys: String, CodingKey {
-                case id
-                case conversationId = "conversation_id"
-                case senderId = "sender_id"
-                case content, iv, type
-                case deletedAt = "deleted_at"
-                case createdAt = "created_at"
-                case mentionedUserIds = "mentioned_user_ids"
-                case mentionsEveryone = "mentions_everyone"
-            }
-
-            init(from decoder: Decoder) throws {
-                let c = try decoder.container(keyedBy: CodingKeys.self)
-                id = try c.decode(UUID.self, forKey: .id)
-                conversationId = try c.decode(UUID.self, forKey: .conversationId)
-                senderId = try c.decodeIfPresent(UUID.self, forKey: .senderId)
-                content = try c.decode(String.self, forKey: .content)
-                iv = try c.decodeIfPresent(String.self, forKey: .iv)
-                type = try c.decode(String.self, forKey: .type)
-                deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
-                createdAt = try c.decode(Date.self, forKey: .createdAt)
-                mentionedUserIds = (try c.decodeIfPresent([UUID].self, forKey: .mentionedUserIds)) ?? []
-                mentionsEveryone = (try c.decodeIfPresent(Bool.self, forKey: .mentionsEveryone)) ?? false
-            }
-        }
-
-        // Map convId → my last_read_at for unread counting
-        var myLastReadAt: [UUID: Date] = [:]
-        for row in memberships {
-            if let convId = row.conversations?.id, let lastRead = row.lastReadAt {
-                myLastReadAt[convId] = lastRead
-            }
-        }
-
+        // get_conversation_summaries replaced a query that selected every
+        // non-deleted message in every conversation (no limit) and counted
+        // unreads here — run on every realtime insert and presence change. Its
+        // unread rule matches the push badge's (00045): no system messages,
+        // nothing from me or a deleted sender, only after my last_read_at.
         var lastMessages: [UUID: DecryptedMessage] = [:]
         var unreadCounts: [UUID: Int] = [:]
         var mentionUnreadCounts: [UUID: Int] = [:]
-
-        if !convIds.isEmpty {
-            let msgs: [LastMsgRow] = try await supabase
-                .from("messages")
-                .select("id, conversation_id, sender_id, content, iv, type, deleted_at, created_at, mentioned_user_ids, mentions_everyone")
-                .in("conversation_id", values: convIds)
-                .is("deleted_at", value: nil)
-                .order("created_at", ascending: false)
-                .execute()
-                .value
-
-            var seen = Set<UUID>()
-            for m in msgs {
-                if !seen.contains(m.conversationId) {
-                    seen.insert(m.conversationId)
-                    let preview: String
-                    if m.iv == nil {
-                        preview = Data(base64Encoded: m.content).flatMap { String(data: $0, encoding: .utf8) } ?? m.content
-                    } else {
-                        preview = m.content
-                    }
-                    lastMessages[m.conversationId] = DecryptedMessage(
-                        id: m.id,
-                        conversationId: m.conversationId,
-                        senderId: m.senderId,
-                        content: preview,
-                        type: m.type,
-                        deletedAt: m.deletedAt,
-                        createdAt: m.createdAt
-                    )
-                }
-
-                // Count messages from others after my last read timestamp
-                if m.senderId != userId {
-                    let lastRead = myLastReadAt[m.conversationId]
-                    if lastRead == nil || m.createdAt > lastRead! {
-                        unreadCounts[m.conversationId, default: 0] += 1
-                        // Mirrors push_targets_for_message's badge subquery: a
-                        // mention counts separately so it can surface through a
-                        // "mute chat" (not "mute everything") conversation.
-                        if m.mentionsEveryone || m.mentionedUserIds.contains(userId) {
-                            mentionUnreadCounts[m.conversationId, default: 0] += 1
-                        }
-                    }
-                }
-            }
+        for row in summaries {
+            unreadCounts[row.conversationId] = row.unreadCount
+            mentionUnreadCounts[row.conversationId] = row.mentionUnreadCount
+            guard let id = row.lastMessageId, let createdAt = row.lastCreatedAt else { continue }
+            lastMessages[row.conversationId] = DecryptedMessage(
+                id: id,
+                conversationId: row.conversationId,
+                senderId: row.lastSenderId,
+                content: "",
+                type: row.lastType ?? "text",
+                createdAt: createdAt
+            )
         }
+        await decryptPreviews(summaries, into: &lastMessages, userId: userId)
 
         return memberships.compactMap { row -> ConversationListItem? in
             guard let conv = row.conversations else { return nil }
@@ -214,6 +146,43 @@ final class ConversationRepository {
             let aTime = $0.lastMessage?.createdAt ?? $0.updatedAt
             let bTime = $1.lastMessage?.createdAt ?? $1.updatedAt
             return aTime > bTime
+        }
+    }
+
+    /// Sidebar previews, branched exactly like every other decrypt site: enc_v
+    /// first, then iv. v2 previews share one batched envelope query. This used
+    /// to show the raw base64 ciphertext of any encrypted last message.
+    private func decryptPreviews(
+        _ rows: [ConversationSummaryRow],
+        into lastMessages: inout [UUID: DecryptedMessage],
+        userId: UUID
+    ) async {
+        let v2 = rows.filter { $0.lastEncV == 2 && $0.lastMessageId != nil }
+        var envelopes: [UUID: MessageEnvelope] = [:]
+        if !v2.isEmpty {
+            try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: userId)
+            envelopes = (try? await MessageRepository().fetchEnvelopes(
+                messageIds: v2.compactMap(\.lastMessageId),
+                candidateFps: KeyStore.candidateFingerprints(forUser: userId)
+            )) ?? [:]
+        }
+
+        for row in rows {
+            guard let id = row.lastMessageId, var message = lastMessages[row.conversationId] else { continue }
+            let content = row.lastContent ?? ""
+            if row.lastEncV == 2 {
+                if let iv = row.lastIv, let envelope = envelopes[id],
+                   let plaintext = EnvelopeEncryption.open(envelope: envelope, content: content, iv: iv, userId: userId) {
+                    message.content = plaintext
+                } else {
+                    message.decryptFailed = true
+                }
+            } else if row.lastEncV == nil && row.lastIv == nil {
+                message.content = EncryptionService.decryptLegacy(content) ?? content
+            } else {
+                message.decryptFailed = true
+            }
+            lastMessages[row.conversationId] = message
         }
     }
 
@@ -318,5 +287,34 @@ final class ConversationRepository {
             .eq("conversation_id", value: conversationId.uuidString)
             .eq("user_id", value: userId.uuidString)
             .execute()
+    }
+}
+
+/// One row of `get_conversation_summaries()`: the caller's conversation, its
+/// newest live message (still ciphertext) and raw unread counts. Mute and
+/// request_state are applied by the list, not the RPC.
+struct ConversationSummaryRow: Decodable {
+    let conversationId: UUID
+    let lastMessageId: UUID?
+    let lastSenderId: UUID?
+    let lastContent: String?
+    let lastIv: String?
+    let lastEncV: Int?
+    let lastType: String?
+    let lastCreatedAt: Date?
+    let unreadCount: Int
+    let mentionUnreadCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case conversationId = "conversation_id"
+        case lastMessageId = "last_message_id"
+        case lastSenderId = "last_sender_id"
+        case lastContent = "last_content"
+        case lastIv = "last_iv"
+        case lastEncV = "last_enc_v"
+        case lastType = "last_type"
+        case lastCreatedAt = "last_created_at"
+        case unreadCount = "unread_count"
+        case mentionUnreadCount = "mention_unread_count"
     }
 }

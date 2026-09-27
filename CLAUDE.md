@@ -263,6 +263,14 @@ is why web never needed this):
 - SDK logs print as `[RT]` (`RealtimeConsoleLogger` in `SupabaseClient.swift`); ours as
   `[Realtime]`. Grab both from the device console before guessing.
 
+**Conversation list channel is scoped** (see `../CLAUDE.md`): `in.(…)` filters built
+from `currentScope()`; `refresh` rebuilds the channel (with a catch-up) whenever the
+conversation or member set changes, and message inserts refetch through a 250ms
+debounce. Previews and unread counts come from `get_conversation_summaries`, and v2
+previews decrypt through one batched envelope query — a failure previews as
+"🔒 Encrypted message", never ciphertext. `ChatViewModel`'s `profiles` binding is
+still unfiltered (members load concurrently with the join).
+
 **Per-subscriber catch-up:** `ConversationListViewModel` → `refresh` +
 `refreshFriendRequestCount`; `ChatViewModel` → `mergeLatestMessages` + pins +
 reactions + read status + request state; `ThreadViewModel` → `load()`;
