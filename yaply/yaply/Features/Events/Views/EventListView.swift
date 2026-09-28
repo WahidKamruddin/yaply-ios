@@ -95,7 +95,7 @@ struct EventListView: View {
             }
         }
         .navigationTitle("Events")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: { createStatus = "planning"; showCreate = true }) {

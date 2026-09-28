@@ -46,7 +46,7 @@ struct MessageRequestsView: View {
             }
         }
         .navigationTitle("Message Requests")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .task { await load() }
     }
 

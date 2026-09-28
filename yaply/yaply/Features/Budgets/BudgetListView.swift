@@ -119,7 +119,7 @@ struct BudgetListView: View {
             }
         }
         .navigationTitle("Budgets")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: { showCreate = true }) {

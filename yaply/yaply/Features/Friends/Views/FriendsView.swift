@@ -45,7 +45,7 @@ struct FriendsView: View {
             }
         }
         .navigationTitle("Friends")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .task {
             await vm.loadAll(userId: currentUserId)
             vm.startRealtime(userId: currentUserId)

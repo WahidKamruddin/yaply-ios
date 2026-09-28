@@ -74,7 +74,7 @@ struct MediaPickerView: View {
                 }
             }
             .navigationTitle("Attach")
-            .navigationBarTitleDisplayMode(.inline)
+            .navChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

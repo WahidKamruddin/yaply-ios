@@ -119,7 +119,7 @@ struct EventDetailView: View {
         }
         .background(Color.yaplyBackground)
         .navigationTitle("Plan")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
     }
 
     // MARK: - Confirmed mode
@@ -242,7 +242,7 @@ struct EventDetailView: View {
         }
         .background(Color.yaplyBackground)
         .navigationTitle("Event")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .task { await loadConfirmed() }
     }
 

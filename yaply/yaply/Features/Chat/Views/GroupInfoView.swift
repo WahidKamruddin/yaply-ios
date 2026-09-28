@@ -251,7 +251,7 @@ struct GroupInfoView: View {
                 }
             }
             .navigationTitle(isDirect ? "Chat Settings" : "Group Info")
-            .navigationBarTitleDisplayMode(.inline)
+            .navChrome()
             .sheet(item: $profileToView) { m in
                 ProfileView(userId: m.id, viewerId: currentUserId)
             }

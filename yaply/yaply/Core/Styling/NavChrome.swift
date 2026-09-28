@@ -1,17 +1,31 @@
 import SwiftUI
 
-/// Landing spot for chat-screen nav bar styling. Today every screen uses the
-/// stock inline nav bar (`.navigationBarTitleDisplayMode(.inline)`, no custom
-/// background/material) — there is no existing seam for it. This scaffold
-/// exists so a UI-style redesign branch has one place to add custom chrome
-/// (e.g. a translucent blur header, or a colored/rounded nav bar) instead of
-/// editing `.toolbar`/`.navigationBarTitleDisplayMode` call sites directly.
+/// Shared nav-bar chrome constants + the `.navChrome()` modifier every
+/// screen's toolbar routes through, so a UI-style redesign branch can
+/// restyle every nav bar app-wide by editing the two constants below.
 ///
-/// Current values reproduce today's stock SwiftUI nav bar exactly — this is
-/// a scaffold only, not a visual change.
+/// Values tuned for ui/messenger-style: flat/stock background (Messenger's
+/// real header is a flat colored bar, not blurred) — same as today's look.
 enum NavChrome {
     static let titleDisplayMode: NavigationBarItem.TitleDisplayMode = .inline
 
-    /// `nil` = system default background/material (today's behavior).
+    /// `nil` = system default background/material (today's stock behavior).
     static let toolbarBackground: Material? = nil
+}
+
+extension View {
+    /// Applies `NavChrome`'s title-display-mode and (if set) a translucent
+    /// toolbar background. Every screen with a nav bar should call this
+    /// instead of `.navigationBarTitleDisplayMode(.inline)` directly.
+    @ViewBuilder
+    func navChrome() -> some View {
+        if let material = NavChrome.toolbarBackground {
+            self
+                .navigationBarTitleDisplayMode(NavChrome.titleDisplayMode)
+                .toolbarBackground(material, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+        } else {
+            self.navigationBarTitleDisplayMode(NavChrome.titleDisplayMode)
+        }
+    }
 }

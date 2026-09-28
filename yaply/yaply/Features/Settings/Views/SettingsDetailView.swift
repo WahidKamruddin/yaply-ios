@@ -15,7 +15,7 @@ struct SettingsDetailView: View {
         }
         .background(Color.yaplyBackground)
         .navigationTitle(tab.label)
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
     }
 
     @ViewBuilder

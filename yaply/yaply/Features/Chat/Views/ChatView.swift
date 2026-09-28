@@ -492,7 +492,7 @@ struct ChatView: View {
             messageToDelete = nil
         }
         .navigationTitle(displayName)
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .toolbar {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 8) {
@@ -527,8 +527,8 @@ struct ChatView: View {
                         withAnimation(.easeInOut(duration: 0.2)) { searchIsActive.toggle() }
                         if !searchIsActive { searchQuery = "" }
                     }
-                    pillButton(systemName: "phone") { comingSoon = true }
-                    pillButton(systemName: "video") { comingSoon = true }
+                    pillButton(systemName: "phone", filled: true) { comingSoon = true }
+                    pillButton(systemName: "video", filled: true) { comingSoon = true }
                     pillButton(systemName: "sidebar.right") { openPanel("tasks") }
                 }
             }
@@ -962,7 +962,7 @@ private struct HelpView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Commands")
-            .navigationBarTitleDisplayMode(.inline)
+            .navChrome()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
