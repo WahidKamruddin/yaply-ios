@@ -1010,7 +1010,7 @@ private struct StickerPopIn: ViewModifier {
 private struct BubbleShape: Shape {
     let isOwn: Bool
     var position: BubblePosition = .single
-    let radius: CGFloat = 18
+    let radius: CGFloat = BubbleGeometry.radius
 
     func path(in rect: CGRect) -> Path {
         let tl = CGPoint(x: rect.minX, y: rect.minY)
@@ -1019,7 +1019,7 @@ private struct BubbleShape: Shape {
         let br = CGPoint(x: rect.maxX, y: rect.maxY)
         // Middle bubbles tuck both inner corners, so they get a slightly
         // softer radius than a single tail corner.
-        let flatRadius: CGFloat = position == .middle ? 6 : 4
+        let flatRadius: CGFloat = position == .middle ? BubbleGeometry.middleFlatRadius : BubbleGeometry.edgeFlatRadius
 
         let tailTop = position.joinsPrevious
         let tailBottom = position != .last
