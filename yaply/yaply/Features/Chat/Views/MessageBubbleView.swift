@@ -292,7 +292,10 @@ struct MessageBubbleView: View, Equatable {
                         decoratedBubbleContent
                     }
 
-                    if !reactions.isEmpty {
+                    // iMessage style renders reactions as corner tapback
+                    // badges overlaid on the bubble itself (see
+                    // decoratedBubbleContent) instead of a row underneath.
+                    if !reactions.isEmpty && ChatStyle.current != .imessage {
                         reactionPills
                     }
 
@@ -358,7 +361,7 @@ struct MessageBubbleView: View, Equatable {
         .padding(.bottom, groupPosition.joinsNext ? 1.5 : 2)
     }
 
-    // MARK: - Reaction pills
+    // MARK: - Reaction pills (yaply / Messenger styles)
 
     private var reactionPills: some View {
         HStack(spacing: 4) {
@@ -374,12 +377,39 @@ struct MessageBubbleView: View, Equatable {
                     .padding(.vertical, 4)
                     .background(group.reactedByMe ? Color.yaplyAccent.opacity(0.15) : Color.yaplyCard)
                     .clipShape(Capsule())
-                    .overlay(Capsule().stroke(group.reactedByMe ? Color.yaplyAccent.opacity(0.4) : Color.yaplyBorder, lineWidth: 1))
+                    .modifier(ReactionPillChrome(reactedByMe: group.reactedByMe))
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 4)
+    }
+
+    // MARK: - Tapback badges (iMessage style)
+
+    /// Small circular badges overlapping the bubble's outer-top corner,
+    /// tapback-style. yaply supports multiple simultaneous reactions per
+    /// message (unlike classic iMessage's single-glyph tapback), so more
+    /// than one badge stacks diagonally rather than hiding information.
+    @ViewBuilder
+    private var tapbackBadges: some View {
+        if !reactions.isEmpty {
+            ZStack {
+                ForEach(Array(reactions.enumerated()), id: \.element.id) { index, group in
+                    Button { onReact?(message.id, group.emoji) } label: {
+                        Text(group.emoji)
+                            .font(.system(size: 13))
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(Color.yaplySurface))
+                            .overlay(Circle().stroke(Color.yaplyBorder, lineWidth: 0.5))
+                            .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: CGFloat(index) * 6, y: CGFloat(index) * 6)
+                    .zIndex(Double(reactions.count - index))
+                }
+            }
+        }
     }
 
     // MARK: - Bubble content
@@ -399,6 +429,13 @@ struct MessageBubbleView: View, Equatable {
                 proxy.frame(in: .global)
             } action: { rect in
                 anchorStore?.frames[message.id] = rect
+            }
+            .overlay(alignment: isOwn ? .topLeading : .topTrailing) {
+                if ChatStyle.current == .imessage {
+                    tapbackBadges
+                        .offset(x: isOwn ? -8 : 8, y: -8)
+                        .zIndex(1)
+                }
             }
             // Keeps the store bounded to what is actually on screen, which is
             // also exactly the set the keyboard handler wants to search.
@@ -578,6 +615,40 @@ private struct ReplyQuoteHeightKey: PreferenceKey {
 /// The visual body of a message bubble (text / media / sticker / gif / deleted /
 /// decrypt-failed) with no row chrome. Extracted so the long-press actions
 /// overlay can render an exact copy of the tapped bubble.
+/// Own-message fill: an accent gradient. Received-message fill: a flat card
+/// color. Shared by every bubble-shaped content view (text, link-preview,
+/// file attachment) so restyling the fill is a one-place edit.
+@ViewBuilder
+func bubbleFillBackground(isOwn: Bool) -> some View {
+    if isOwn {
+        LinearGradient(
+            colors: [Color.yaplyAccent, Color.yaplyAccentDark],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    } else {
+        Color.yaplyCard
+    }
+}
+
+/// Reaction-pill chrome for the yaply/Messenger reaction row: a border
+/// stroke for yaply, a soft drop shadow (no stroke) for Messenger's
+/// borderless pill look.
+private struct ReactionPillChrome: ViewModifier {
+    let reactedByMe: Bool
+
+    func body(content: Content) -> some View {
+        switch ChatStyle.current {
+        case .messenger:
+            content.shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+        default:
+            content.overlay(
+                Capsule().stroke(reactedByMe ? Color.yaplyAccent.opacity(0.4) : Color.yaplyBorder, lineWidth: 1)
+            )
+        }
+    }
+}
+
 struct BubbleContentView: View {
     let message: DecryptedMessage
     let isOwn: Bool
@@ -708,19 +779,7 @@ struct BubbleContentView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(
-                Group {
-                    if isOwn {
-                        LinearGradient(
-                            colors: [Color.yaplyAccent, Color.yaplyAccentDark],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    } else {
-                        Color.yaplyCard
-                    }
-                }
-            )
+            .background(bubbleFillBackground(isOwn: isOwn))
             .clipShape(BubbleShape(isOwn: isOwn, position: position))
             .overlay(
                 BubbleShape(isOwn: isOwn, position: position)
@@ -732,19 +791,7 @@ struct BubbleContentView: View {
                 .foregroundStyle(isOwn ? .white : Color.yaplyPrimary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(
-                    Group {
-                        if isOwn {
-                            LinearGradient(
-                                colors: [Color.yaplyAccent, Color.yaplyAccentDark],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        } else {
-                            Color.yaplyCard
-                        }
-                    }
-                )
+                .background(bubbleFillBackground(isOwn: isOwn))
                 .clipShape(BubbleShape(isOwn: isOwn, position: position))
                 .overlay(
                     BubbleShape(isOwn: isOwn, position: position)
@@ -962,19 +1009,7 @@ private struct FileAttachmentBubble: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .frame(maxWidth: 220, alignment: .leading)
-            .background(
-                Group {
-                    if isOwn {
-                        LinearGradient(
-                            colors: [Color.yaplyAccent, Color.yaplyAccentDark],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    } else {
-                        Color.yaplyCard
-                    }
-                }
-            )
+            .background(bubbleFillBackground(isOwn: isOwn))
             .clipShape(RoundedRectangle(cornerRadius: 16))
             .overlay(
                 RoundedRectangle(cornerRadius: 16)
