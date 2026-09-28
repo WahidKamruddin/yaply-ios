@@ -575,6 +575,22 @@ private struct ReplyQuoteHeightKey: PreferenceKey {
     }
 }
 
+/// Own-message fill: an accent gradient. Received-message fill: a flat card
+/// color. Shared by every bubble-shaped content view (text, link-preview,
+/// file attachment) so restyling the fill is a one-place edit.
+@ViewBuilder
+func bubbleFillBackground(isOwn: Bool) -> some View {
+    if isOwn {
+        LinearGradient(
+            colors: [Color.yaplyAccent, Color.yaplyAccentDark],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    } else {
+        Color.yaplyCard
+    }
+}
+
 /// The visual body of a message bubble (text / media / sticker / gif / deleted /
 /// decrypt-failed) with no row chrome. Extracted so the long-press actions
 /// overlay can render an exact copy of the tapped bubble.
@@ -708,19 +724,7 @@ struct BubbleContentView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(
-                Group {
-                    if isOwn {
-                        LinearGradient(
-                            colors: [Color.yaplyAccent, Color.yaplyAccentDark],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    } else {
-                        Color.yaplyCard
-                    }
-                }
-            )
+            .background(bubbleFillBackground(isOwn: isOwn))
             .clipShape(BubbleShape(isOwn: isOwn, position: position))
             .overlay(
                 BubbleShape(isOwn: isOwn, position: position)
@@ -732,19 +736,7 @@ struct BubbleContentView: View {
                 .foregroundStyle(isOwn ? .white : Color.yaplyPrimary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(
-                    Group {
-                        if isOwn {
-                            LinearGradient(
-                                colors: [Color.yaplyAccent, Color.yaplyAccentDark],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        } else {
-                            Color.yaplyCard
-                        }
-                    }
-                )
+                .background(bubbleFillBackground(isOwn: isOwn))
                 .clipShape(BubbleShape(isOwn: isOwn, position: position))
                 .overlay(
                     BubbleShape(isOwn: isOwn, position: position)
@@ -962,19 +954,7 @@ private struct FileAttachmentBubble: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .frame(maxWidth: 220, alignment: .leading)
-            .background(
-                Group {
-                    if isOwn {
-                        LinearGradient(
-                            colors: [Color.yaplyAccent, Color.yaplyAccentDark],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    } else {
-                        Color.yaplyCard
-                    }
-                }
-            )
+            .background(bubbleFillBackground(isOwn: isOwn))
             .clipShape(RoundedRectangle(cornerRadius: 16))
             .overlay(
                 RoundedRectangle(cornerRadius: 16)
