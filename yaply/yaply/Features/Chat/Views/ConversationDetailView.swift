@@ -39,7 +39,7 @@ struct ConversationDetailView: View {
             tabBar
             contentView
         }
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .onAppear { selectedTab = initialTab }
     }
 

@@ -29,14 +29,14 @@ struct AuthView: View {
                     HStack(spacing: 10) {
                         YaplyLogoMark(size: 40)
                         Text("yaply")
-                            .font(.display(30, weight: .medium))
+                            .font(.chatDisplay(30, weight: .medium))
                             .foregroundStyle(Color.yaplyPrimary)
                     }
                     .shadow(color: Color.yaplyLogoEnd.opacity(0.2), radius: 10, y: 4)
 
                     VStack(spacing: 4) {
                         Text(title)
-                            .font(.display(24, weight: .bold))
+                            .font(.chatDisplay(24, weight: .bold))
                             .foregroundStyle(Color.yaplyPrimary)
                         Text(subtitle)
                             .font(.subheadline)

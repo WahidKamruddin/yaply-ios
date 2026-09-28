@@ -69,6 +69,6 @@ struct SettingsView: View {
         .scrollContentBackground(.hidden)
         .background(Color.yaplyBackground)
         .navigationTitle("Settings")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
     }
 }

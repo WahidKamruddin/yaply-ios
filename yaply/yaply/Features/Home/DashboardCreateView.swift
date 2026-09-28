@@ -94,7 +94,7 @@ struct DashboardCreateView: View {
                 }
             }
             .navigationTitle(type == .reminder ? "New Reminder" : type == .event ? "New Event" : "New Note")
-            .navigationBarTitleDisplayMode(.inline)
+            .navChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

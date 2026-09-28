@@ -29,7 +29,7 @@ struct ProfileView: View {
 
                             VStack(spacing: 4) {
                                 Text(profile.name)
-                                    .font(.display(22, weight: .semibold))
+                                    .font(.chatDisplay(22, weight: .semibold))
                                     .foregroundStyle(Color.yaplyPrimary)
                                 Text("@\(profile.username)")
                                     .font(.subheadline)
@@ -69,7 +69,7 @@ struct ProfileView: View {
                         .foregroundStyle(Color.yaplySecondary)
                 }
             }
-            .navigationBarTitleDisplayMode(.inline)
+            .navChrome()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }

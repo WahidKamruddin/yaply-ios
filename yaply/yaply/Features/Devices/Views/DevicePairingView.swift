@@ -42,7 +42,7 @@ struct DevicePairingView: View {
         }
         .background(Color.yaplyBackground)
         .navigationTitle(trustRole == .sender ? "Send history" : "Get history")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .onAppear {
             if let initialCode, let normalized = DevicePairingCrypto.normalizeCode(initialCode) {
                 vm.start(role: trustRole, pairingCode: normalized)
@@ -127,7 +127,7 @@ struct DevicePairingView: View {
                 )
                 .ignoresSafeArea()
                 .navigationTitle("Scan code")
-                .navigationBarTitleDisplayMode(.inline)
+                .navChrome()
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { isScanning = false }

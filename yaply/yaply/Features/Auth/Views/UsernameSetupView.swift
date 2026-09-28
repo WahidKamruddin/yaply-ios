@@ -45,7 +45,7 @@ struct UsernameSetupView: View {
 
                 VStack(spacing: 4) {
                     Text("Choose a username")
-                        .font(.display(18, weight: .bold))
+                        .font(.chatDisplay(18, weight: .bold))
                         .foregroundStyle(Color.yaplyPrimary)
                     Text("People will find and mention you by this.")
                         .font(.subheadline)

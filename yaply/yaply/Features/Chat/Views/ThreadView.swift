@@ -115,7 +115,7 @@ struct ThreadView: View {
             }
             .background(Color.yaplyBackground.ignoresSafeArea())
             .navigationTitle("Thread")
-            .navigationBarTitleDisplayMode(.inline)
+            .navChrome()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { isPresented = false }

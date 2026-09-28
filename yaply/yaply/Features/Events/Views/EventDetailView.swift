@@ -88,7 +88,7 @@ struct EventDetailView: View {
             VStack(alignment: .leading, spacing: 6) {
                 statusBadge
                 Text(event.name)
-                    .font(.display(20))
+                    .font(.chatDisplay(20))
                     .foregroundStyle(Color.yaplyPrimary)
                     .lineLimit(2)
                 if let desc = event.description, !desc.isEmpty {
@@ -119,7 +119,7 @@ struct EventDetailView: View {
         }
         .background(Color.yaplyBackground)
         .navigationTitle("Plan")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
     }
 
     // MARK: - Confirmed mode
@@ -131,7 +131,7 @@ struct EventDetailView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top, spacing: 10) {
                         Text(event.name)
-                            .font(.display(22))
+                            .font(.chatDisplay(22))
                             .foregroundStyle(Color.yaplyPrimary)
                         Spacer(minLength: 0)
                         statusBadge
@@ -242,7 +242,7 @@ struct EventDetailView: View {
         }
         .background(Color.yaplyBackground)
         .navigationTitle("Event")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .task { await loadConfirmed() }
     }
 

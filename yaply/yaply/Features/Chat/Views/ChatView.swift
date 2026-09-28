@@ -439,7 +439,7 @@ struct ChatView: View {
                 ZStack {
                     Color.yaplyAccent.opacity(0.12).ignoresSafeArea()
                     Text("Drop to send")
-                        .font(.display(15, weight: .semibold))
+                        .font(.chatDisplay(15, weight: .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 18)
                         .padding(.vertical, 10)
@@ -492,33 +492,12 @@ struct ChatView: View {
             messageToDelete = nil
         }
         .navigationTitle(displayName)
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .toolbar {
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 8) {
-                    ZStack(alignment: .bottomTrailing) {
-                        AvatarView(
-                            url: vm.isGroupConversation ? nil : currentOtherMember?.profile.avatarUrl,
-                            name: displayName,
-                            size: 36
-                        )
-                        if !vm.isGroupConversation && currentOtherMember != nil {
-                            PresenceDotView(isOnline: isOnline, borderColor: .yaplySurface, size: 9)
-                        }
-                    }
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(displayName)
-                            .font(.display(16, weight: .semibold))
-                            .foregroundStyle(Color.yaplyPrimary)
-                        if !vm.isGroupConversation && currentOtherMember != nil {
-                            Text(isOnline ? "Online" : "Offline")
-                                .font(.caption2)
-                                .foregroundStyle(isOnline ? Color.yaplyOnline : Color.yaplySecondary)
-                        }
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { showGroupInfo = true }
+                headerPrincipalContent
+                    .contentShape(Rectangle())
+                    .onTapGesture { showGroupInfo = true }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 4) {
@@ -527,8 +506,10 @@ struct ChatView: View {
                         withAnimation(.easeInOut(duration: 0.2)) { searchIsActive.toggle() }
                         if !searchIsActive { searchQuery = "" }
                     }
-                    pillButton(systemName: "phone") { comingSoon = true }
-                    pillButton(systemName: "video") { comingSoon = true }
+                    // Messenger renders call icons as solid-filled circles;
+                    // yaply/iMessage keep the outline style.
+                    pillButton(systemName: "phone", filled: ChatStyle.current == .messenger) { comingSoon = true }
+                    pillButton(systemName: "video", filled: ChatStyle.current == .messenger) { comingSoon = true }
                     pillButton(systemName: "sidebar.right") { openPanel("tasks") }
                 }
             }
@@ -614,6 +595,54 @@ struct ChatView: View {
             title: "Coming soon",
             message: "Voice and video calls aren't available yet."
         )
+    }
+
+    /// Nav-bar header content, style-dependent: yaply/Messenger show the
+    /// avatar beside the name (with an online/offline caption for DMs);
+    /// iMessage shows a compact centered avatar-above-name layout with no
+    /// caption, matching its real header.
+    @ViewBuilder
+    private var headerPrincipalContent: some View {
+        if ChatStyle.current == .imessage {
+            VStack(spacing: 2) {
+                ZStack(alignment: .bottomTrailing) {
+                    AvatarView(
+                        url: vm.isGroupConversation ? nil : currentOtherMember?.profile.avatarUrl,
+                        name: displayName,
+                        size: 32
+                    )
+                    if !vm.isGroupConversation && currentOtherMember != nil {
+                        PresenceDotView(isOnline: isOnline, borderColor: .yaplySurface, size: 8)
+                    }
+                }
+                Text(displayName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.yaplyPrimary)
+            }
+        } else {
+            HStack(spacing: 8) {
+                ZStack(alignment: .bottomTrailing) {
+                    AvatarView(
+                        url: vm.isGroupConversation ? nil : currentOtherMember?.profile.avatarUrl,
+                        name: displayName,
+                        size: 36
+                    )
+                    if !vm.isGroupConversation && currentOtherMember != nil {
+                        PresenceDotView(isOnline: isOnline, borderColor: .yaplySurface, size: 9)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(displayName)
+                        .font(.chatDisplay(16, weight: .semibold))
+                        .foregroundStyle(Color.yaplyPrimary)
+                    if !vm.isGroupConversation && currentOtherMember != nil {
+                        Text(isOnline ? "Online" : "Offline")
+                            .font(.caption2)
+                            .foregroundStyle(isOnline ? Color.yaplyOnline : Color.yaplySecondary)
+                    }
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -962,7 +991,7 @@ private struct HelpView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Commands")
-            .navigationBarTitleDisplayMode(.inline)
+            .navChrome()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }

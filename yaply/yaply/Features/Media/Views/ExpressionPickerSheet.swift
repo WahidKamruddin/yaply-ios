@@ -58,7 +58,7 @@ struct ExpressionPickerSheet: View {
             }
             .background(Color.yaplyBackground)
             .navigationTitle("Add to message")
-            .navigationBarTitleDisplayMode(.inline)
+            .navChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

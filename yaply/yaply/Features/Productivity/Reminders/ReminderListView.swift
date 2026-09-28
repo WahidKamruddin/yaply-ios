@@ -72,7 +72,7 @@ struct ReminderListView: View {
             }
         }
         .navigationTitle("Reminders")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .task { await load() }
         .onReceive(NotificationCenter.default.publisher(for: .yaplyItemCreated)) { notif in
             guard (notif.userInfo?["type"] as? String) == "reminders" else { return }

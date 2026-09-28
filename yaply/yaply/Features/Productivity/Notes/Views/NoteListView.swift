@@ -87,7 +87,7 @@ struct NoteListView: View {
             }
         }
         .navigationTitle("Notes")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: { showAdd = true }) {

@@ -178,7 +178,7 @@ struct AccountSettingsView: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(displayName.isEmpty ? (vm.profile?.username ?? "You") : displayName)
-                    .font(.display(15, weight: .semibold))
+                    .font(.chatDisplay(15, weight: .semibold))
                     .foregroundStyle(Color.yaplyPrimary)
                 Text(userEmail)
                     .font(.caption)

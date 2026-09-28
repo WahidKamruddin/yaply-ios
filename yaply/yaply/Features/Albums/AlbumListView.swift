@@ -72,7 +72,7 @@ struct AlbumListView: View {
             }
         }
         .navigationTitle("Albums")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: { showCreate = true }) {
@@ -249,7 +249,7 @@ struct AlbumGalleryView: View {
             }
         }
         .navigationTitle(album.name)
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 if album.eventId != nil {

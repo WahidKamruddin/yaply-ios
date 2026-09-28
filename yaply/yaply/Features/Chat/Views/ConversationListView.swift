@@ -38,7 +38,7 @@ struct ConversationListView: View {
                     HStack(spacing: 8) {
                         YaplyLogoMark(size: 26)
                         Text("yaply")
-                            .font(.display(20, weight: .medium))
+                            .font(.chatDisplay(20, weight: .medium))
                             .foregroundStyle(Color.yaplyPrimary)
                     }
                     Spacer()

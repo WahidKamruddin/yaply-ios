@@ -34,7 +34,7 @@ struct ConversationRowView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
                     Text(displayName)
-                        .font(.display(15, weight: .semibold))
+                        .font(.chatDisplay(15, weight: .semibold))
                         .foregroundStyle(Color.yaplyPrimary)
                         .lineLimit(1)
                     Spacer()
