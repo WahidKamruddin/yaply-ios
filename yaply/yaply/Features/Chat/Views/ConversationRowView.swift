@@ -67,7 +67,7 @@ struct ConversationRowView: View {
                 }
             }
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 12)
         .padding(.horizontal, 16)
         .background(.clear)
         // Whole row is the tap target, not just the avatar and text: a clear

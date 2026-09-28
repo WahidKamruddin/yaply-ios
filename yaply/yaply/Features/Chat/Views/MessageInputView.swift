@@ -300,9 +300,9 @@ struct MessageInputView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.yaplySurface)
-                .clipShape(RoundedRectangle(cornerRadius: 22))
+                .clipShape(RoundedRectangle(cornerRadius: 20))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 22)
+                    RoundedRectangle(cornerRadius: 20)
                         .stroke(isFocused ? Color.yaplyAccent.opacity(0.5) : Color.yaplyBorder,
                                 lineWidth: isFocused ? 1.5 : 1)
                 )

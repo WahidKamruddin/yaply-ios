@@ -374,7 +374,7 @@ struct MessageBubbleView: View, Equatable {
                     .padding(.vertical, 4)
                     .background(group.reactedByMe ? Color.yaplyAccent.opacity(0.15) : Color.yaplyCard)
                     .clipShape(Capsule())
-                    .overlay(Capsule().stroke(group.reactedByMe ? Color.yaplyAccent.opacity(0.4) : Color.yaplyBorder, lineWidth: 1))
+                    .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
                 }
                 .buttonStyle(.plain)
             }
