@@ -292,10 +292,6 @@ struct MessageBubbleView: View, Equatable {
                         decoratedBubbleContent
                     }
 
-                    if !reactions.isEmpty {
-                        reactionPills
-                    }
-
                     if threadCount > 0 {
                         Button {
                             onOpenThread?(message)
@@ -358,28 +354,31 @@ struct MessageBubbleView: View, Equatable {
         .padding(.bottom, groupPosition.joinsNext ? 1.5 : 2)
     }
 
-    // MARK: - Reaction pills
+    // MARK: - Tapback badges (iMessage-style)
 
-    private var reactionPills: some View {
-        HStack(spacing: 4) {
-            ForEach(reactions) { group in
-                Button { onReact?(message.id, group.emoji) } label: {
-                    HStack(spacing: 3) {
-                        Text(group.emoji).font(.system(size: 14))
-                        Text("\(group.count)")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(group.reactedByMe ? Color.yaplyAccent : Color.yaplyPrimary)
+    /// Small circular badges overlapping the bubble's outer-top corner,
+    /// tapback-style. yaply supports multiple simultaneous reactions per
+    /// message (unlike classic iMessage's single-glyph tapback), so more
+    /// than one badge stacks diagonally rather than hiding information.
+    @ViewBuilder
+    private var tapbackBadges: some View {
+        if !reactions.isEmpty {
+            ZStack {
+                ForEach(Array(reactions.enumerated()), id: \.element.id) { index, group in
+                    Button { onReact?(message.id, group.emoji) } label: {
+                        Text(group.emoji)
+                            .font(.system(size: 13))
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(Color.yaplySurface))
+                            .overlay(Circle().stroke(Color.yaplyBorder, lineWidth: 0.5))
+                            .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(group.reactedByMe ? Color.yaplyAccent.opacity(0.15) : Color.yaplyCard)
-                    .clipShape(Capsule())
-                    .overlay(Capsule().stroke(group.reactedByMe ? Color.yaplyAccent.opacity(0.4) : Color.yaplyBorder, lineWidth: 1))
+                    .buttonStyle(.plain)
+                    .offset(x: CGFloat(index) * 6, y: CGFloat(index) * 6)
+                    .zIndex(Double(reactions.count - index))
                 }
-                .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 4)
     }
 
     // MARK: - Bubble content
@@ -399,6 +398,11 @@ struct MessageBubbleView: View, Equatable {
                 proxy.frame(in: .global)
             } action: { rect in
                 anchorStore?.frames[message.id] = rect
+            }
+            .overlay(alignment: isOwn ? .topLeading : .topTrailing) {
+                tapbackBadges
+                    .offset(x: isOwn ? -8 : 8, y: -8)
+                    .zIndex(1)
             }
             // Keeps the store bounded to what is actually on screen, which is
             // also exactly the set the keyboard handler wants to search.
