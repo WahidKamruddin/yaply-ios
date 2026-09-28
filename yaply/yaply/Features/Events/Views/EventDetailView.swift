@@ -88,7 +88,7 @@ struct EventDetailView: View {
             VStack(alignment: .leading, spacing: 6) {
                 statusBadge
                 Text(event.name)
-                    .font(.display(20))
+                    .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(Color.yaplyPrimary)
                     .lineLimit(2)
                 if let desc = event.description, !desc.isEmpty {
@@ -131,7 +131,7 @@ struct EventDetailView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top, spacing: 10) {
                         Text(event.name)
-                            .font(.display(22))
+                            .font(.system(size: 22, weight: .bold))
                             .foregroundStyle(Color.yaplyPrimary)
                         Spacer(minLength: 0)
                         statusBadge

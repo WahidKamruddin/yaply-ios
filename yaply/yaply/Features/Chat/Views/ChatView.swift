@@ -439,7 +439,7 @@ struct ChatView: View {
                 ZStack {
                     Color.yaplyAccent.opacity(0.12).ignoresSafeArea()
                     Text("Drop to send")
-                        .font(.display(15, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 18)
                         .padding(.vertical, 10)

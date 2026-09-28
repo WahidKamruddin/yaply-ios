@@ -32,7 +32,7 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(HomeViewModel.greeting(name: vm.displayName))
-                        .font(.display(22, weight: .bold))
+                        .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(Color.yaplyPrimary)
                     Text("Here's what's coming up across your chats")
                         .font(.subheadline)

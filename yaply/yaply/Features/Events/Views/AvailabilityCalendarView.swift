@@ -155,7 +155,7 @@ struct AvailabilityCalendarView: View {
             Spacer(minLength: 8)
             VStack(spacing: 5) {
                 Text(weekLabel())
-                    .font(.display(15, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.yaplyPrimary)
                 if let best, let date = Self.slotDate(best.slot) {
                     Button {
