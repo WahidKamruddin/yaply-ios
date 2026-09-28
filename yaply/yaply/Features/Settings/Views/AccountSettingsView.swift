@@ -23,6 +23,7 @@ struct AccountSettingsView: View {
     @State private var showDeleteDialog = false
 
     @AppStorage("appearanceMode") private var appearanceMode: AppearanceMode = .system
+    @AppStorage(ChatStyle.storageKey) private var chatStyle: ChatStyle = .yaply
     @Environment(AuthService.self) private var authService
     @Environment(AppRouter.self) private var router
 
@@ -81,6 +82,8 @@ struct AccountSettingsView: View {
             }
 
             appearanceSection
+
+            chatStyleSection
 
             if vm.hasEmailAuth {
                 passwordSection
@@ -263,6 +266,18 @@ struct AccountSettingsView: View {
             Picker("Appearance", selection: $appearanceMode) {
                 ForEach(AppearanceMode.allCases) { mode in
                     Text(mode.label).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private var chatStyleSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Chat style").font(.caption).foregroundStyle(Color.yaplySecondary)
+            Picker("Chat style", selection: $chatStyle) {
+                ForEach(ChatStyle.allCases) { style in
+                    Text(style.label).tag(style)
                 }
             }
             .pickerStyle(.segmented)
