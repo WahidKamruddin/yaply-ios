@@ -53,7 +53,7 @@ final class ThreadViewModel {
         }
     }
 
-    func sendReply(text: String) async {
+    func sendReply(text: String, linkPreview: LinkPreview? = nil, latePreview: Task<LinkPreview?, Never>? = nil) async {
         guard !text.isBlank else { return }
         isSending = true
         defer { isSending = false }
@@ -72,9 +72,13 @@ final class ThreadViewModel {
             try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
             let memberIds = await resolvedMemberIds()
 
+            // Sealed alongside the text, same as the main composer
+            // (ChatViewModel.sendMessage) — see ../CLAUDE.md's "Link previews".
+            let sealedPlaintext = LinkPreviewCodec.encodeTextMessage(text, linkPreview: linkPreview)
+
             let sent: DbMessage
             if let sealed = await EnvelopeEncryption.encryptForMembers(
-                plaintext: text, memberUserIds: memberIds, repository: repository
+                plaintext: sealedPlaintext, memberUserIds: memberIds, repository: repository
             ) {
                 let params = SendMessageWithEnvelopesParams(
                     pConversationId: conversationId, pContent: sealed.content, pIv: sealed.iv,
@@ -87,7 +91,7 @@ final class ThreadViewModel {
             } else {
                 let params = SendMessageParams(
                     conversationId: conversationId, senderId: currentUserId,
-                    content: Data(text.utf8).base64EncodedString(), iv: nil, type: "text",
+                    content: Data(sealedPlaintext.utf8).base64EncodedString(), iv: nil, type: "text",
                     replyToId: rootMessage.id, threadId: rootMessage.id,
                     mentionedUserIds: mentions.mentionedUserIds, mentionsEveryone: mentions.mentionsEveryone
                 )
@@ -96,10 +100,46 @@ final class ThreadViewModel {
             replies.append(DecryptedMessage(
                 id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
                 content: text, type: sent.type, replyToId: rootMessage.id,
-                threadId: rootMessage.id, createdAt: sent.createdAt
+                threadId: rootMessage.id, createdAt: sent.createdAt, linkPreview: linkPreview
             ))
+            // The reply already sent as plain text (never blocked on the
+            // fetch) — if a preview was still resolving, attach it once
+            // it's ready instead of discarding it.
+            if linkPreview == nil, let latePreview {
+                let messageId = sent.id
+                Task { [weak self] in
+                    guard let resolved = await latePreview.value else { return }
+                    await self?.attachLinkPreview(messageId: messageId, text: text, preview: resolved)
+                }
+            }
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    // Re-seals an already-sent reply once a preview still in flight at send
+    // time resolves. Unlike ChatViewModel, this device's own realtime
+    // subscription is NOT filtered by sender (every insert/update triggers a
+    // full `load()`), so no local patch is needed here — the reload picks up
+    // the attached preview for every viewer, including this one. Silent
+    // no-op on failure, matching today's behavior when a preview fails
+    // outright.
+    private func attachLinkPreview(messageId: UUID, text: String, preview: LinkPreview) async {
+        do {
+            let sealedPlaintext = LinkPreviewCodec.encodeTextMessage(text, linkPreview: preview)
+            let memberIds = await resolvedMemberIds()
+            if let sealed = await EnvelopeEncryption.encryptForMembers(
+                plaintext: sealedPlaintext, memberUserIds: memberIds, repository: repository
+            ) {
+                let params = EditMessageWithEnvelopesParams(
+                    pMessageId: messageId, pContent: sealed.content, pIv: sealed.iv, pEnvelopes: sealed.envelopes
+                )
+                _ = try await repository.editMessageWithEnvelopes(params)
+            } else {
+                try await repository.editPhase1Content(messageId: messageId, content: sealedPlaintext)
+            }
+        } catch {
+            print("[yaply] failed to attach a late-resolved link preview: \(error)")
         }
     }
 
@@ -146,6 +186,14 @@ final class ThreadViewModel {
                 InsertAction.self, schema: "public", table: "messages",
                 filter: .eq("thread_id", value: rootMessage.id.uuidString)
             )
+            // Picks up a late-attached preview (or any future real edit) for
+            // every viewer of this thread, including the sender's own other
+            // views — previously only INSERT triggered a reload, so an
+            // edited reply never live-updated.
+            let updates = channel.postgresChange(
+                UpdateAction.self, schema: "public", table: "messages",
+                filter: .eq("thread_id", value: rootMessage.id.uuidString)
+            )
             await RealtimeConnectionMonitor.subscribe(channel, label: label)
             // After subscribing, never before — see ChatViewModel.startRealtime.
             if refetchOnSubscribe { await load() }
@@ -156,6 +204,7 @@ final class ThreadViewModel {
                     }
                 }
                 group.addTask { for await _ in inserts { await self.load() } }
+                group.addTask { for await _ in updates { await self.load() } }
             }
         }
     }
@@ -177,13 +226,16 @@ final class ThreadViewModel {
     private func decryptAll(_ raw: [DbMessage]) async -> [DecryptedMessage] {
         var result: [DecryptedMessage] = []
         for msg in raw {
-            let (content, failed) = await decryptDbMessage(msg)
+            let (rawContent, failed) = await decryptDbMessage(msg)
+            let (content, linkPreview): (String, LinkPreview?) = (!failed && msg.type == "text")
+                ? LinkPreviewCodec.decodeTextMessage(rawContent)
+                : (rawContent, nil)
             result.append(DecryptedMessage(
                 id: msg.id, conversationId: msg.conversationId, senderId: msg.senderId,
                 content: content, type: msg.type, mediaUrl: msg.mediaUrl,
                 replyToId: msg.replyToId, threadId: msg.threadId,
                 editedAt: msg.editedAt, deletedAt: msg.deletedAt, createdAt: msg.createdAt,
-                senderProfile: msg.senderProfile, decryptFailed: failed
+                senderProfile: msg.senderProfile, decryptFailed: failed, linkPreview: linkPreview
             ))
         }
         return result

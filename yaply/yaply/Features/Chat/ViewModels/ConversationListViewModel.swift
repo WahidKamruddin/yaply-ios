@@ -41,6 +41,9 @@ final class ConversationListViewModel {
     private var realtimeChannel: RealtimeChannelV2?
     private var reconnectToken: UUID?
     private var refreshDebounce: Task<Void, Never>?
+    private var deliveredDebounce: Task<Void, Never>?
+    /// The delivery watermark last sent, so a refresh with nothing newer is free.
+    private var deliveredUpTo: Date?
 
     /// What the live channel's filters were built from. When a refresh changes
     /// it (joined or left a conversation, a member changed) the channel is rebuilt.
@@ -65,6 +68,7 @@ final class ConversationListViewModel {
         do {
             conversations = try await repository.fetchConversations(userId: userId)
             await syncBadge()
+            scheduleMarkDelivered()
             // The channel only hears the conversations and members it was built
             // with, so a changed set means rebuilding it (and catching up after).
             if realtimeTask != nil, let subscribedScope, currentScope() != subscribedScope {
@@ -72,6 +76,26 @@ final class ConversationListViewModel {
             }
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    /// Delivery watermark: this device now holds everything up to the newest
+    /// message it just fetched. Every realtime insert refreshes the list, so this
+    /// also covers live arrivals. Debounced; skipped when nothing is newer.
+    private func scheduleMarkDelivered() {
+        guard let newest = conversations.compactMap({ $0.lastMessage?.createdAt }).max(),
+              deliveredUpTo.map({ newest > $0 }) ?? true
+        else { return }
+        deliveredDebounce?.cancel()
+        deliveredDebounce = Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            do {
+                try await repository.markDelivered(until: newest)
+                deliveredUpTo = newest
+            } catch {
+                print("[yaply] failed to mark delivered: \(error)")
+            }
         }
     }
 
@@ -270,6 +294,7 @@ final class ConversationListViewModel {
     }
 
     func stopRealtime() {
+        deliveredDebounce?.cancel()
         refreshDebounce?.cancel()
         refreshDebounce = nil
         subscribedScope = nil

@@ -82,7 +82,7 @@ struct MessageBubbleView: View, Equatable {
             && lhs.currentUserId == rhs.currentUserId
             && lhs.replyMessage == rhs.replyMessage
             && lhs.threadCount == rhs.threadCount
-            && lhs.isRead == rhs.isRead
+            && lhs.statusText == rhs.statusText
             && lhs.reactions == rhs.reactions
             && lhs.groupPosition == rhs.groupPosition
             && lhs.showsSenderName == rhs.showsSenderName
@@ -95,7 +95,11 @@ struct MessageBubbleView: View, Equatable {
     let currentUserId: UUID
     var replyMessage: DecryptedMessage?
     var threadCount: Int = 0
-    var isRead: Bool? = nil
+    /// Own messages only, once tapped: "Sending…" / "Sent" / "Delivered" /
+    /// "Seen…". Nil shows nothing — only the seen avatars show untapped.
+    var statusText: String? = nil
+    /// Tapping your own bubble toggles its status line.
+    var onTap: ((DecryptedMessage) -> Void)?
     let reactions: [ReactionGroup]
     let onReply: (DecryptedMessage) -> Void
     let onDelete: (UUID) -> Void
@@ -309,10 +313,12 @@ struct MessageBubbleView: View, Equatable {
                         .padding(.top, 2)
                     }
 
-                    // Read checkmarks only — timestamp revealed by swipe
-                    if isOwn && !message.isDeleted && isRead != nil {
-                        readCheckmarks
+                    if let statusText {
+                        Text(statusText)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.yaplySecondary)
                             .padding(.horizontal, 4)
+                            .transition(.opacity)
                     }
                 }
                 .background(
@@ -350,26 +356,6 @@ struct MessageBubbleView: View, Equatable {
         // Tighter spacing inside a run; unchanged at its outer edges.
         .padding(.top, groupPosition.joinsPrevious ? 1.5 : (startsNewSpeaker ? 6 : 2))
         .padding(.bottom, groupPosition.joinsNext ? 1.5 : 2)
-    }
-
-    // MARK: - Read checkmarks
-
-    private var readCheckmarks: some View {
-        Group {
-            if isRead == true {
-                HStack(spacing: -3) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 10, weight: .semibold))
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 10, weight: .semibold))
-                }
-                .foregroundStyle(Color.yaplyAccent)
-            } else {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color.yaplySecondary.opacity(0.7))
-            }
-        }
     }
 
     // MARK: - Reaction pills
@@ -419,6 +405,10 @@ struct MessageBubbleView: View, Equatable {
             .onDisappear {
                 anchorStore?.frames.removeValue(forKey: message.id)
             }
+            // Before the long press so a quick tap and a hold are told apart.
+            // Only attached for your own messages: on anyone else's bubble a tap
+            // must still fall through to the list's dismiss-keyboard tap.
+            .modifier(OptionalTap(action: isOwn && !message.isDeleted ? onTap.map { tap in { tap(message) } } : nil))
             .onLongPressGesture(minimumDuration: 0.3) {
                 guard !message.isDeleted else { return }
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -482,6 +472,9 @@ struct MessageBubbleView: View, Equatable {
         case "file": return "📎 File"
         default:
             if reply.decryptFailed { return "🔒 Encrypted message" }
+            if reply.content.isEmpty, let linkPreview = reply.linkPreview {
+                return "🔗 \(linkPreview.title ?? linkPreview.siteName ?? linkPreview.url)"
+            }
             return String(reply.content.prefix(80))
         }
     }
@@ -701,6 +694,38 @@ struct BubbleContentView: View {
                 .aspectRatio(ratio, contentMode: .fit)
                 .frame(maxWidth: Self.mediaMaxWidth, maxHeight: Self.mediaMaxHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
+        } else if let preview = message.linkPreview {
+            // Same bubble chrome as the plain-text case below, wrapping a
+            // VStack so an (optional) text line and the preview card share
+            // one bubble. Mirrors web's MessageBubble.tsx.
+            VStack(alignment: .leading, spacing: 6) {
+                if !message.content.isEmpty {
+                    Text(mentionAttributedContent)
+                        .font(.system(size: 15))
+                        .foregroundStyle(isOwn ? .white : Color.yaplyPrimary)
+                }
+                LinkPreviewCardView(preview: preview, isOwn: isOwn, hasText: false)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                Group {
+                    if isOwn {
+                        LinearGradient(
+                            colors: [Color.yaplyAccent, Color.yaplyAccentDark],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    } else {
+                        Color.yaplyCard
+                    }
+                }
+            )
+            .clipShape(BubbleShape(isOwn: isOwn, position: position))
+            .overlay(
+                BubbleShape(isOwn: isOwn, position: position)
+                    .stroke(isOwn ? Color.clear : Color.yaplyBorderSoft, lineWidth: 1)
+            )
         } else {
             Text(mentionAttributedContent)
                 .font(.system(size: 15))
@@ -736,19 +761,19 @@ struct BubbleContentView: View {
     // MessageBubble.tsx renderMentions.
     private var mentionAttributedContent: AttributedString {
         guard !mentionMembers.isEmpty, message.content.contains("@") else {
-            return AttributedString(message.content)
+            return linkify(message.content)
         }
         let candidates = mentionMembers.map { Mentions.Candidate(userId: $0.userId, username: $0.profile.username) }
         let tokens = Mentions.tokenizeMentions(text: message.content, members: candidates)
         if tokens.count == 1, case .text = tokens[0] {
-            return AttributedString(message.content)
+            return linkify(message.content)
         }
 
         var result = AttributedString()
         for token in tokens {
             switch token {
             case .text(let value):
-                result += AttributedString(value)
+                result += linkify(value)
             case .mention(let value, let userId, let everyone):
                 var run = AttributedString(value)
                 let isSelfMention = everyone || (currentUserId != nil && userId == currentUserId)
@@ -768,6 +793,32 @@ struct BubbleContentView: View {
         return result
     }
 
+    // Turns bare http(s) URLs and "example.com"-style bare domains into
+    // tappable `.link` runs (SwiftUI renders these as clickable automatically).
+    // Presentation-only, but reuses the shared matcher so compose-time
+    // detection and rendering agree on what counts as a link. Mirrors web's
+    // MessageBubble.tsx linkifyPlain.
+    private func linkify(_ text: String) -> AttributedString {
+        let matches = LinkPreviewCodec.findUrls(in: text)
+        guard !matches.isEmpty else { return AttributedString(text) }
+        var result = AttributedString()
+        var lastIndex = text.startIndex
+        for match in matches {
+            if match.range.lowerBound > lastIndex {
+                result += AttributedString(String(text[lastIndex..<match.range.lowerBound]))
+            }
+            var run = AttributedString(match.raw)
+            run.link = URL(string: match.href)
+            run.underlineStyle = .single
+            result += run
+            lastIndex = match.range.upperBound
+        }
+        if lastIndex < text.endIndex {
+            result += AttributedString(String(text[lastIndex...]))
+        }
+        return result
+    }
+
     private func mediaPill(systemImage: String, label: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: systemImage).foregroundStyle(Color.yaplySecondary)
@@ -778,6 +829,20 @@ struct BubbleContentView: View {
         .background(Color.yaplyBackground)
         .clipShape(BubbleShape(isOwn: isOwn, position: position))
         .overlay(BubbleShape(isOwn: isOwn, position: position).stroke(Color.yaplyBorder, lineWidth: 1))
+    }
+}
+
+/// `.onTapGesture` only when there's something to do — an unconditional one
+/// would swallow taps meant for views further up.
+private struct OptionalTap: ViewModifier {
+    let action: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        if let action {
+            content.onTapGesture(perform: action)
+        } else {
+            content
+        }
     }
 }
 

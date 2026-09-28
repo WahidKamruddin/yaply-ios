@@ -112,6 +112,10 @@ struct DecryptedMessage: Identifiable, Hashable {
     // before this device existed) or any other decrypt failure — an honest, permanent
     // state. `content` is left empty; never render raw ciphertext or garbled bytes.
     var decryptFailed: Bool = false
+    // Present when the sender attached a resolved link preview (type="text"
+    // only). Decoded out of `content` by LinkPreviewCodec at every decrypt
+    // site — see ../CLAUDE.md's "Link previews" section.
+    var linkPreview: LinkPreview?
 
     var isDeleted: Bool { deletedAt != nil }
     var isText: Bool { type == "text" }
@@ -133,7 +137,11 @@ struct DecryptedMessage: Identifiable, Hashable {
         case "image": return "📷 Photo"
         case "voice": return "🎤 Voice message"
         case "file": return "📎 File"
-        default: return content
+        default:
+            if content.isEmpty, let linkPreview {
+                return "🔗 \(linkPreview.title ?? linkPreview.siteName ?? linkPreview.url)"
+            }
+            return content
         }
     }
 }

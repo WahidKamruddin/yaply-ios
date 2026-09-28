@@ -14,7 +14,7 @@ struct ReplyStripView: View {
                     .font(.caption)
                     .fontWeight(.medium)
                     .foregroundStyle(Color.yaplyAccent)
-                Text(message.isDeleted ? "Message deleted" : message.content)
+                Text(message.isDeleted ? "Message deleted" : message.previewText)
                     .font(.caption)
                     .foregroundStyle(Color.yaplyTertiary)
                     .lineLimit(1)

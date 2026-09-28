@@ -25,6 +25,12 @@ struct MessageListLayout {
     var messagesById: [UUID: DecryptedMessage] = [:]
     var threadCounts: [UUID: Int] = [:]
     var lastOwnMessageId: UUID?
+    /// Messenger-style "seen" avatars: message id → the members whose read
+    /// watermark lands on it (see `ReadReceipts.seenHeads`).
+    var seenHeads: [UUID: [UUID]] = [:]
+    /// Watermarks after `ReadReceipts.withImpliedReads` — what the tapped
+    /// status line must be computed against too.
+    var effectiveWatermarks: [UUID: MemberWatermark] = [:]
 
     /// `Calendar.current` bridges a fresh value on every access, and the old
     /// code called it twice per message per frame. One shared instance is
@@ -34,10 +40,20 @@ struct MessageListLayout {
     static func build(
         _ messages: [DecryptedMessage],
         isGroupConversation: Bool,
-        currentUserId: UUID
+        currentUserId: UUID,
+        watermarks: [UUID: MemberWatermark] = [:],
+        pendingIds: Set<UUID> = []
     ) -> MessageListLayout {
         var layout = MessageListLayout()
         guard !messages.isEmpty else { return layout }
+
+        layout.effectiveWatermarks = ReadReceipts.withImpliedReads(
+            messages: messages, watermarks: watermarks, pendingIds: pendingIds
+        )
+        layout.seenHeads = ReadReceipts.seenHeads(
+            messages: messages, watermarks: layout.effectiveWatermarks,
+            currentUserId: currentUserId, pendingIds: pendingIds
+        )
 
         layout.messagesById = Dictionary(
             messages.map { ($0.id, $0) },

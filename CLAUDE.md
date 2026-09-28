@@ -203,6 +203,17 @@ extension can only modify a notification, not suppress it.
 
 ---
 
+## Read Receipts (IMPLEMENTED)
+
+Contract in `../CLAUDE.md` → *Read receipts (watermarks)*. iOS: `ReadReceipts.swift`
+(pure rules, port of web's `readReceipts.ts`), `ChatViewModel.memberWatermarks` /
+`pendingIds` (both feed `MessageListLayout.seenHeads`, so rows stay `.equatable()`), `scheduleMarkRead` (foreground-only, also on `didBecomeActive`),
+`ConversationListViewModel.scheduleMarkDelivered`. Tapping your own bubble toggles
+`ChatView.expandedStatusId`; the tap is attached only to own bubbles so other taps
+still reach the list's keyboard-dismiss.
+
+---
+
 ## Realtime Connection Recovery
 
 File: `Core/Realtime/RealtimeConnectionMonitor.swift` (+ `ReconnectingPillView.swift`).
@@ -553,6 +564,60 @@ Full contract (grammar, wire format, mute model, server suppression) is in
 - The Notification Service Extension needs **no changes** — `send-push` already
   sets the `"Mentioned you"` fallback body server-side before the payload ships;
   the extension only ever decrypts, per its existing mandate.
+
+---
+
+## Link previews (URL unfurling)
+
+Full contract (wire-format encoding, decrypt-site rule, the `link-preview` edge
+function, the `LinkPreview` shape) is in `../CLAUDE.md`. iOS-specific notes:
+
+- `Features/Chat/Support/LinkPreview.swift` (`LinkPreview` struct + the
+  `LinkPreviewCodec` encode/decode/extract-URL functions) mirrors
+  `packages/shared/src/linkPreview.ts`.
+- **Compose-time resolution lives in `MessageInputView`**, not the view models —
+  it owns the text binding, so it owns the debounce `Task<LinkPreview?, Never>`,
+  the resolved `LinkPreview?` state, and the dismissible `LinkPreviewChipView`.
+  `onSend` takes `(LinkPreview?, Task<LinkPreview?, Never>?) -> Void` — the
+  second param is the still-running fetch when send happens before it resolves
+  (never cancelled; `performSend()` hands it off instead of discarding it).
+  Both call sites (`ChatView`, `ThreadView`) forward both into
+  `ChatViewModel.sendMessage(text:linkPreview:latePreview:)` /
+  `ThreadViewModel.sendReply(text:linkPreview:latePreview:)`.
+- Resolution calls `supabase.functions.invoke("link-preview", ...)` and decodes
+  straight to `LinkPreview` via the generic `invoke<T: Decodable>` overload — no
+  manual JSON parsing.
+- **Late attach:** when `linkPreview` is nil but `latePreview` isn't, both view
+  models spawn a detached `Task` that awaits `latePreview.value` and calls a
+  private `attachLinkPreview`, which re-seals via
+  `LinkPreviewCodec.encodeTextMessage` + `EnvelopeEncryption.encryptForMembers`
+  and calls `MessageRepository.editMessageWithEnvelopes` (v2) or
+  `editPhase1Content` (phase-1) — the same RPC/fallback split as sending.
+  `ChatViewModel.attachLinkPreview` patches `messages[idx]` directly afterward
+  (its realtime skips own-sender updates — see below); `ThreadViewModel`'s
+  needs no local patch since its realtime reload isn't sender-filtered.
+  Silent no-op on failure, matching a failed initial fetch.
+- **Four decrypt sites**, matching root CLAUDE.md's list: `ChatViewModel.decryptAll`
+  (batch) and its realtime single-message path, `ThreadViewModel.decryptAll`,
+  and `ConversationRepository.decryptPreviews` (sidebar). Each decodes
+  `LinkPreviewCodec.decodeTextMessage` only when `type == "text"` and decrypt
+  didn't fail, then sets both `content` and `linkPreview` on the
+  `DecryptedMessage`.
+- **A fifth spot, `ChatViewModel.handleMessageUpdate`, re-decrypts on an
+  `edited_at` change** it hasn't seen before — every other realtime UPDATE
+  (e.g. a plain delete) still just carries `deletedAt` forward and reuses the
+  old content. `ThreadViewModel` doesn't need the equivalent: its realtime
+  handler is a blanket `load()` on any insert/update, which already re-decrypts
+  everything from scratch.
+- **Rendering:** `BubbleContentView` gets a new branch (before the plain-text
+  fallback) that wraps an optional text `Text` plus `LinkPreviewCardView` in the
+  same bubble chrome. No changes needed to `MessageBubbleView`'s custom
+  `Equatable` — it already compares `lhs.message == rhs.message` wholesale, and
+  `DecryptedMessage`'s synthesized `Hashable` picks up the new field
+  automatically.
+- `DecryptedMessage.previewText` and `MessageBubbleView.replyPreview` both show
+  `"🔗 <title>"` for a link-only message (empty `content`, non-nil
+  `linkPreview`) instead of a blank sidebar/reply-quote line.
 
 ---
 

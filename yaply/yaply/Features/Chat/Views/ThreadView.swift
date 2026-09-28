@@ -103,10 +103,10 @@ struct ThreadView: View {
                     MessageInputView(
                         text: $messageText,
                         replyTo: nil,
-                        onSend: {
+                        onSend: { linkPreview, latePreview in
                             let text = messageText
                             messageText = ""
-                            Task { await vm.sendReply(text: text) }
+                            Task { await vm.sendReply(text: text, linkPreview: linkPreview, latePreview: latePreview) }
                         },
                         onCancelReply: { },
                         disabled: vm.isSending,

@@ -162,6 +162,31 @@ final class MessageRepository {
             .value
     }
 
+    // Re-seals an already-sent v2 message — the RPC replaces ALL envelopes
+    // atomically, never appends. See ../CLAUDE.md's "Link previews" section.
+    func editMessageWithEnvelopes(_ params: EditMessageWithEnvelopesParams) async throws -> DbMessage {
+        return try await supabase
+            .rpc("edit_message_with_envelopes", params: params)
+            .single()
+            .execute()
+            .value
+    }
+
+    // Phase-1 messages have no envelopes to replace atomically, so a plain
+    // column update (permitted by messages' "sender can update" RLS policy)
+    // is sufficient — mirrors sendMessageWithEnvelopes's phase-1 counterpart.
+    func editPhase1Content(messageId: UUID, content: String) async throws {
+        struct Row: Encodable {
+            let content: String
+            let edited_at: String
+        }
+        try await supabase
+            .from("messages")
+            .update(Row(content: content, edited_at: Date().iso8601))
+            .eq("id", value: messageId.uuidString)
+            .execute()
+    }
+
     // Fetches an envelope this install can open. `candidateFps` is this device's
     // own fingerprint plus any escrowed ones adopted via live pairing (see
     // KeyStore.candidateFingerprints) — a message sealed before this device
@@ -266,39 +291,6 @@ final class MessageRepository {
             .order("created_at", ascending: true)
             .execute()
             .value
-    }
-
-    // MARK: - Read receipts
-
-    func insertReadReceipts(_ messageIds: [UUID], userId: UUID) async throws {
-        guard !messageIds.isEmpty else { return }
-        struct Insert: Encodable {
-            let message_id: String
-            let user_id: String
-        }
-        try await supabase
-            .from("message_reads")
-            .upsert(
-                messageIds.map { Insert(message_id: $0.uuidString, user_id: userId.uuidString) },
-                onConflict: "message_id,user_id"
-            )
-            .execute()
-    }
-
-    func fetchReadSet(messageIds: [UUID], currentUserId: UUID) async throws -> Set<UUID> {
-        guard !messageIds.isEmpty else { return [] }
-        struct ReadRow: Decodable {
-            let messageId: UUID
-            enum CodingKeys: String, CodingKey { case messageId = "message_id" }
-        }
-        let rows: [ReadRow] = try await supabase
-            .from("message_reads")
-            .select("message_id")
-            .in("message_id", values: messageIds.map(\.uuidString))
-            .neq("user_id", value: currentUserId.uuidString)
-            .execute()
-            .value
-        return Set(rows.map(\.messageId))
     }
 
     // MARK: - Reactions

@@ -20,6 +20,8 @@ struct ChatView: View {
     @State private var threadRoot: DecryptedMessage?
     @State private var scrollToId: UUID?
     @State private var highlightedId: UUID?
+    /// The own message whose Sent / Delivered / Seen line is showing (tap to toggle).
+    @State private var expandedStatusId: UUID?
     @State private var searchIsActive = false
     @State private var searchQuery = ""
     @State private var showGroupInfo = false
@@ -357,15 +359,16 @@ struct ChatView: View {
                     MessageInputView(
                         text: $messageText,
                         replyTo: vm.replyToMessage,
-                        onSend: {
+                        onSend: { linkPreview, latePreview in
                             let rawText = messageText.trimmingCharacters(in: .whitespaces)
                             guard !rawText.isBlank else { return }
                             messageText = ""
                             vm.notifyStopTyping()
                             if let cmd = ParsedCommand.parse(rawText) {
+                                latePreview?.cancel()
                                 Task { await handleCommand(cmd) }
                             } else {
-                                Task { await vm.sendMessage(text: rawText) }
+                                Task { await vm.sendMessage(text: rawText, linkPreview: linkPreview, latePreview: latePreview) }
                             }
                         },
                         onCancelReply: { vm.replyToMessage = nil },
@@ -534,9 +537,6 @@ struct ChatView: View {
         .onDisappear {
             router.activeConversationId = nil
             vm.onDisappear()
-        }
-        .task {
-            try? await convRepository.markRead(conversationId: conversationId, userId: currentUserId)
         }
         .sheet(isPresented: $showExpression) {
             ExpressionPickerSheet(onGifSelected: { gif in
@@ -742,15 +742,19 @@ struct ChatView: View {
         position: BubblePosition,
         startsNewSpeaker: Bool
     ) -> some View {
+        VStack(spacing: 0) {
         MessageBubbleView(
             message: msg,
             isOwn: msg.senderId == currentUserId,
             currentUserId: currentUserId,
             replyMessage: msg.replyToId.flatMap { layout.messagesById[$0] },
             threadCount: layout.threadCounts[msg.id] ?? 0,
-            isRead: msg.senderId == currentUserId && msg.id == layout.lastOwnMessageId
-                ? vm.readByOtherSet.contains(msg.id)
-                : nil,
+            statusText: statusText(for: msg),
+            onTap: { m in
+                withAnimation(.easeOut(duration: 0.15)) {
+                    expandedStatusId = expandedStatusId == m.id ? nil : m.id
+                }
+            },
             reactions: vm.reactionsMap[msg.id] ?? [],
             onReply: { vm.replyToMessage = $0 },
             onDelete: { id in Task { await vm.deleteMessage(id: id) } },
@@ -776,6 +780,13 @@ struct ChatView: View {
         // every visible bubble to rebuild its body.
         .equatable()
         .opacity(actionsMessage?.id == msg.id ? 0 : 1)
+
+            if let readers = layout.seenHeads[msg.id] {
+                SeenHeadsView(profiles: readers.compactMap { id in
+                    vm.conversationMembers.first { $0.userId == id }?.profile
+                })
+            }
+        }
         .id(msg.id)
         // The highlight is a rounded background, not a clip: clipping every row
         // just for this cost an offscreen mask pass per row, image rows included.
@@ -788,6 +799,19 @@ struct ChatView: View {
             insertion: .move(edge: .bottom).combined(with: .opacity),
             removal: .opacity
         ))
+    }
+
+    /// Own messages only, and only once tapped: Sending… / Sent / Delivered /
+    /// Seen. The seen avatars are the only receipt shown without a tap.
+    private func statusText(for msg: DecryptedMessage) -> String? {
+        guard msg.senderId == currentUserId, !msg.isDeleted, expandedStatusId == msg.id else { return nil }
+        let status = ReadReceipts.status(
+            of: msg, watermarks: vm.layout.effectiveWatermarks,
+            currentUserId: currentUserId, pending: vm.pendingIds.contains(msg.id)
+        )
+        return ReadReceipts.label(status, isGroup: vm.isGroupConversation) { id in
+            vm.conversationMembers.first { $0.userId == id }?.profile.name ?? "Someone"
+        }
     }
 
     private func handleCommand(_ cmd: ParsedCommand) async {
@@ -950,6 +974,38 @@ private struct HelpView: View {
 }
 
 // MARK: - Bubble anchor tracking (for the long-press actions overlay)
+
+/// Messenger's "seen" avatars: the members whose read watermark lands on this
+/// message, right-aligned under it. As they read further, the layout moves them
+/// down to a later message (placement is `ReadReceipts.seenHeads`).
+private struct SeenHeadsView: View {
+    let profiles: [Profile]
+    private static let maxShown = 4
+
+    var body: some View {
+        if !profiles.isEmpty {
+            HStack(spacing: 3) {
+                Spacer(minLength: 0)
+                HStack(spacing: -4) {
+                    ForEach(profiles.prefix(Self.maxShown)) { profile in
+                        AvatarView(url: profile.avatarUrl, name: profile.name, size: 14)
+                            .overlay(Circle().stroke(Color.yaplyBackground, lineWidth: 1))
+                    }
+                }
+                if profiles.count > Self.maxShown {
+                    Text("+\(profiles.count - Self.maxShown)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.yaplySecondary)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 2)
+            .transition(.opacity)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Seen by \(profiles.map(\.name).joined(separator: ", "))")
+        }
+    }
+}
 
 /// Bubble frames in global coordinates, written by each visible
 /// `MessageBubbleView` and read only on demand.

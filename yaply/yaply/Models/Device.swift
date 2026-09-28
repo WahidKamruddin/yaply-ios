@@ -167,3 +167,21 @@ struct SendMessageWithEnvelopesParams: Encodable {
         case pMentionsEveryone = "p_mentions_everyone"
     }
 }
+
+// Params for the `edit_message_with_envelopes` RPC — re-seals an already-sent
+// `type='text'` message, replacing ALL envelopes atomically. Today's only
+// caller is attaching a link preview that resolved after send (see
+// ../CLAUDE.md's "Link previews"), never a general edit-your-message feature.
+struct EditMessageWithEnvelopesParams: Encodable {
+    let pMessageId: UUID
+    let pContent: String
+    let pIv: String
+    let pEnvelopes: [EnvelopePayload]
+
+    enum CodingKeys: String, CodingKey {
+        case pMessageId = "p_message_id"
+        case pContent   = "p_content"
+        case pIv        = "p_iv"
+        case pEnvelopes = "p_envelopes"
+    }
+}

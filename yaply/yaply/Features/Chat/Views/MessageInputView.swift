@@ -1,11 +1,18 @@
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import Supabase
 
 struct MessageInputView: View {
     @Binding var text: String
     let replyTo: DecryptedMessage?
-    let onSend: () -> Void
+    // The resolved (and not dismissed) link preview at the moment of send, if
+    // any — sealed alongside the text by the caller. See ../CLAUDE.md's "Link
+    // previews" section.
+    // `latePreview` is handed along when a fetch is still in flight — the
+    // message must never wait on it (send now, attach later if/when it
+    // resolves). See ../CLAUDE.md's "Link previews" section.
+    let onSend: (LinkPreview?, Task<LinkPreview?, Never>?) -> Void
     let onCancelReply: () -> Void
     let disabled: Bool
     /// Expanding attachment menu actions (Messenger / Instagram style).
@@ -35,6 +42,74 @@ struct MessageInputView: View {
     @State private var menuExpanded = false
     @State private var mentionDismissedForQuery: String? = nil
     @FocusState private var isFocused: Bool
+
+    // Link preview — debounced-resolve-then-seal, mirroring the web composer
+    // (MessageInput.tsx). See ../CLAUDE.md's "Link previews" section.
+    @State private var linkPreview: LinkPreview?
+    @State private var previewLoading = false
+    @State private var previewDismissed = false
+    @State private var lastResolvedUrl: String?
+    // The in-flight fetch, if any — captured at send time and handed along
+    // instead of cancelled, so a still-resolving preview can be attached
+    // after the message already sent.
+    @State private var previewTask: Task<LinkPreview?, Never>?
+
+    private var activePreview: LinkPreview? { previewDismissed ? nil : linkPreview }
+
+    private func handleLinkPreviewChange(_ newText: String) {
+        guard let url = LinkPreviewCodec.extractFirstUrl(newText) else {
+            previewTask?.cancel()
+            lastResolvedUrl = nil
+            linkPreview = nil
+            previewLoading = false
+            previewDismissed = false
+            previewTask = nil
+            return
+        }
+        guard url != lastResolvedUrl else { return }
+        lastResolvedUrl = url
+        previewDismissed = false
+        previewLoading = true
+        previewTask?.cancel()
+        previewTask = Task {
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return nil }
+            struct RequestBody: Encodable { let url: String }
+            var result: LinkPreview?
+            do {
+                result = try await supabase.functions.invoke(
+                    "link-preview", options: .init(body: RequestBody(url: url))
+                )
+            } catch {
+                result = nil
+            }
+            if !Task.isCancelled {
+                linkPreview = result
+                previewLoading = false
+            }
+            return result
+        }
+    }
+
+    // Resets composer state only — never cancels a task already handed to
+    // `onSend` as `latePreview`, which keeps resolving independently.
+    private func resetLinkPreview() {
+        linkPreview = nil
+        previewLoading = false
+        previewDismissed = false
+        lastResolvedUrl = nil
+        previewTask = nil
+    }
+
+    // Never blocks sending on the fetch: seals in whatever's already
+    // resolved; if one's still in flight, hands its Task along instead of
+    // cancelling it.
+    private func performSend() {
+        let resolvedPreview = activePreview
+        let latePreview = (resolvedPreview == nil && previewLoading) ? previewTask : nil
+        resetLinkPreview()
+        onSend(resolvedPreview, latePreview)
+    }
 
     // SwiftUI's TextField exposes no caret position, so — unlike the web
     // composer, which tracks the real caret — this treats the trailing
@@ -80,6 +155,14 @@ struct MessageInputView: View {
         VStack(spacing: 0) {
             if let reply = replyTo {
                 ReplyStripView(message: reply, onDismiss: onCancelReply)
+            }
+
+            if previewLoading || activePreview != nil {
+                LinkPreviewChipView(
+                    preview: activePreview,
+                    isLoading: previewLoading,
+                    onDismiss: { previewDismissed = true }
+                )
             }
 
             // Command palette: shown while typing the command name (before a space)
@@ -183,7 +266,7 @@ struct MessageInputView: View {
                         .disabled(disabled)
                         .onSubmit {
                             guard !text.isBlank else { return }
-                            onSend()
+                            performSend()
                         }
                         .onChange(of: text) { _, new in
                             let isPaletteActive = new.hasPrefix("/") && !new.contains(" ")
@@ -200,6 +283,7 @@ struct MessageInputView: View {
                             } else {
                                 onStopTyping?()
                             }
+                            handleLinkPreviewChange(new)
                         }
 
                     if showAttachments {
@@ -227,7 +311,7 @@ struct MessageInputView: View {
                 Button(action: {
                     guard !text.isBlank else { return }
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    onSend()
+                    performSend()
                 }) {
                     Image(systemName: "message.fill")
                         .font(.system(size: 13, weight: .semibold))

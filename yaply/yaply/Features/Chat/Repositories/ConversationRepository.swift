@@ -182,6 +182,12 @@ final class ConversationRepository {
             } else {
                 message.decryptFailed = true
             }
+            // Only type="text" ever carries a link-preview envelope.
+            if !message.decryptFailed, message.type == "text" {
+                let decoded = LinkPreviewCodec.decodeTextMessage(message.content)
+                message.content = decoded.text
+                message.linkPreview = decoded.linkPreview
+            }
             lastMessages[row.conversationId] = message
         }
     }
@@ -277,15 +283,21 @@ final class ConversationRepository {
             .execute()
     }
 
-    func markRead(conversationId: UUID, userId: UUID) async throws {
-        struct ReadUpdate: Encodable {
-            let last_read_at: String
-        }
+    /// Advances my read (and delivery) watermark in one conversation to the
+    /// server's now(). Server clock on purpose: a device clock running behind
+    /// never reached a message's created_at, so it could never show as seen.
+    func markRead(conversationId: UUID) async throws {
         try await supabase
-            .from("conversation_members")
-            .update(ReadUpdate(last_read_at: Date().iso8601))
-            .eq("conversation_id", value: conversationId.uuidString)
-            .eq("user_id", value: userId.uuidString)
+            .rpc("mark_conversation_read", params: ["p_conversation_id": conversationId.uuidString])
+            .execute()
+    }
+
+    /// Advances my delivery watermark in every conversation to `until` — the
+    /// newest created_at this device has actually received. Forward-only and a
+    /// no-op when nothing would change.
+    func markDelivered(until: Date) async throws {
+        try await supabase
+            .rpc("mark_delivered", params: ["p_until": until.iso8601])
             .execute()
     }
 }

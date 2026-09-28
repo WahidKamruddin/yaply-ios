@@ -24,7 +24,9 @@ final class ChatViewModel {
         layout = MessageListLayout.build(
             messages,
             isGroupConversation: isGroupConversation,
-            currentUserId: currentUserId
+            currentUserId: currentUserId,
+            watermarks: memberWatermarks,
+            pendingIds: pendingIds
         )
     }
 
@@ -44,8 +46,18 @@ final class ChatViewModel {
     private(set) var pinnedMessageIds: [UUID] = []
 
     // Read receipts
-    private(set) var readByOtherSet: Set<UUID> = []
-    private var markedReadIds: Set<UUID> = []
+    /// Every member's read/delivery watermark — the whole input to the
+    /// Messenger-style receipts (see `ReadReceipts`). Kept live by
+    /// `conversation_members` UPDATEs on the chat channel.
+    private(set) var memberWatermarks: [UUID: MemberWatermark] = [:] {
+        didSet { if oldValue != memberWatermarks { rebuildLayout() } }
+    }
+    /// Optimistic sends not yet confirmed by the server.
+    private(set) var pendingIds: Set<UUID> = [] {
+        didSet { if oldValue != pendingIds { rebuildLayout() } }
+    }
+    private var markReadTask: Task<Void, Never>?
+    private var activeObserver: NSObjectProtocol?
 
     // Group info
     private(set) var conversationMembers: [MemberSummary] = []
@@ -78,7 +90,6 @@ final class ChatViewModel {
     private var reconnectToken: UUID?
     private var isTyping = false
     private var typingDebounce: Task<Void, Never>?
-    private var receiptsTask: Task<Void, Never>?
     /// `created_at` of the newest row the initial page fetch returned — the
     /// catch-up after the first subscribe fetches only what landed after it.
     private var newestFetchedAt: Date?
@@ -114,12 +125,20 @@ final class ChatViewModel {
         isLoading = false
         // Warm the device list so the first send is a single round-trip.
         DeviceListCache.prefetch(userIds: memberIdsForEncryption(), repository: repository)
-        await markAndFetchReceipts()
+        // Coming back to the app with this chat open counts as reading it.
+        activeObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.scheduleMarkRead() }
+        }
+        scheduleMarkRead()
     }
 
     func onDisappear() {
-        receiptsTask?.cancel()
-        receiptsTask = nil
+        markReadTask?.cancel()
+        markReadTask = nil
+        if let activeObserver { NotificationCenter.default.removeObserver(activeObserver) }
+        activeObserver = nil
         sendTypingEvent(false)
         typingDebounce?.cancel()
         typingTimers.values.forEach { $0.cancel() }
@@ -169,7 +188,6 @@ final class ChatViewModel {
             if let reactions = try? await rawReactions {
                 reactionsMap = buildReactionGroups(from: reactions)
             }
-            await markAndFetchReceipts()
         } catch {
             self.error = error.localizedDescription
         }
@@ -195,7 +213,6 @@ final class ChatViewModel {
         let dropped = Set(messages.prefix(messages.count - kept.count).map(\.id))
         messages = kept
         reactionsMap = reactionsMap.filter { !dropped.contains($0.key) }
-        readByOtherSet.subtract(dropped)
         nextCursor = oldestKept.createdAt
         hasMore = true
         return true
@@ -211,28 +228,64 @@ final class ChatViewModel {
         await loadReactions()
     }
 
-    // MARK: - Read receipts
+    // MARK: - Read receipts (watermarks)
 
-    private func markAndFetchReceipts() async {
-        let unread = messages
-            .filter { $0.senderId != currentUserId && !markedReadIds.contains($0.id) }
-            .map(\.id)
-        if !unread.isEmpty {
-            unread.forEach { markedReadIds.insert($0) }
-            do {
-                try await repository.insertReadReceipts(unread, userId: currentUserId)
-            } catch {
-                unread.forEach { markedReadIds.remove($0) }
-            }
+    /// Advances my read watermark to the server's now() — only while the app is
+    /// in the foreground, since Messenger doesn't count a thread as seen until
+    /// you're actually looking at it. Debounced so a burst of arrivals is one
+    /// write. Also clears this chat's unread badge server-side.
+    private func scheduleMarkRead() {
+        markReadTask?.cancel()
+        markReadTask = Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, UIApplication.shared.applicationState == .active else { return }
+            try? await ConversationRepository().markRead(conversationId: conversationId)
         }
-        await fetchReadStatus()
     }
 
-    private func fetchReadStatus() async {
-        let ownIds = messages.filter { $0.senderId == currentUserId }.map(\.id)
-        if let set = try? await repository.fetchReadSet(messageIds: ownIds, currentUserId: currentUserId) {
-            readByOtherSet = set
+    /// Every member's watermarks, for a reconnect catch-up.
+    private func loadWatermarks() async {
+        struct Row: Decodable {
+            let userId: UUID
+            let lastReadAt: Date?
+            let lastDeliveredAt: Date?
+            enum CodingKeys: String, CodingKey {
+                case userId = "user_id"; case lastReadAt = "last_read_at"; case lastDeliveredAt = "last_delivered_at"
+            }
         }
+        guard let rows: [Row] = try? await supabase
+            .from("conversation_members")
+            .select("user_id, last_read_at, last_delivered_at")
+            .eq("conversation_id", value: conversationId.uuidString)
+            .execute()
+            .value
+        else { return }
+        memberWatermarks = Dictionary(
+            rows.map { ($0.userId, MemberWatermark(readAt: $0.lastReadAt, deliveredAt: $0.lastDeliveredAt)) },
+            uniquingKeysWith: { _, new in new }
+        )
+    }
+
+    /// A `conversation_members` UPDATE: someone's watermark moved (or my own
+    /// request_state changed — accepting on another device).
+    private func applyMemberUpdate(_ record: [String: AnyJSON]) {
+        guard let userId = record["user_id"]?.stringValue.flatMap(UUID.init(uuidString:)) else { return }
+        memberWatermarks[userId] = MemberWatermark(
+            readAt: record["last_read_at"]?.stringValue.flatMap(Self.parseRealtimeDate),
+            deliveredAt: record["last_delivered_at"]?.stringValue.flatMap(Self.parseRealtimeDate)
+        )
+        if userId == currentUserId, let state = record["request_state"]?.stringValue {
+            myRequestState = state
+        }
+    }
+
+    /// Tracks an optimistic send, so a tap on it reads "Sending…".
+    private func beginPending(_ id: UUID) {
+        pendingIds.insert(id)
+    }
+
+    private func endPending(_ id: UUID) {
+        pendingIds.remove(id)
     }
 
     // MARK: - Group info
@@ -241,9 +294,12 @@ final class ChatViewModel {
         struct MemberRow: Decodable {
             let userId: UUID
             let role: String
+            let lastReadAt: Date?
+            let lastDeliveredAt: Date?
             let profiles: Profile?
             enum CodingKeys: String, CodingKey {
                 case userId = "user_id"; case role; case profiles
+                case lastReadAt = "last_read_at"; case lastDeliveredAt = "last_delivered_at"
             }
         }
         struct ConvInfo: Decodable {
@@ -256,7 +312,7 @@ final class ChatViewModel {
         }
         guard let info: ConvInfo = try? await supabase
             .from("conversations")
-            .select("type, name, conversation_members(user_id, role, profiles(id, username, display_name, avatar_url, is_online, last_seen_at, created_at, updated_at))")
+            .select("type, name, conversation_members(user_id, role, last_read_at, last_delivered_at, profiles(id, username, display_name, avatar_url, is_online, last_seen_at, created_at, updated_at))")
             .eq("id", value: conversationId.uuidString)
             .single()
             .execute()
@@ -265,6 +321,12 @@ final class ChatViewModel {
 
         isGroupConversation = info.type == "group"
         groupName = info.name
+        memberWatermarks = Dictionary(
+            info.conversationMembers.map {
+                ($0.userId, MemberWatermark(readAt: $0.lastReadAt, deliveredAt: $0.lastDeliveredAt))
+            },
+            uniquingKeysWith: { _, new in new }
+        )
         conversationMembers = info.conversationMembers.compactMap { cm in
             guard let profile = cm.profiles else { return nil }
             return MemberSummary(
@@ -315,18 +377,22 @@ final class ChatViewModel {
 
     // MARK: - Send text
 
-    func sendMessage(text: String) async {
+    func sendMessage(text: String, linkPreview: LinkPreview? = nil, latePreview: Task<LinkPreview?, Never>? = nil) async {
         guard !text.isBlank else { return }
 
-        // Optimistic: show message immediately before network round-trip
+        // Optimistic: show message immediately before network round-trip.
+        // content stays the plain display text (never the encoded envelope);
+        // linkPreview is threaded separately, matching every decrypt site.
         let tempId = UUID()
         let capturedReplyTo = replyToMessage
         messages.append(DecryptedMessage(
             id: tempId, conversationId: conversationId, senderId: currentUserId,
             content: text, type: "text",
             replyToId: capturedReplyTo?.id, threadId: capturedReplyTo?.threadId,
-            createdAt: Date()
+            createdAt: Date(), linkPreview: linkPreview
         ))
+        beginPending(tempId)
+        defer { endPending(tempId) }
         replyToMessage = nil
 
         // Extracted from plaintext before encryption — mention targeting is the
@@ -346,10 +412,17 @@ final class ChatViewModel {
             // Registration is single-flight — safe to call even if already done.
             try? await EncryptionRegistrar.shared.ensureEncryptionKeys(userId: currentUserId)
 
+            // A link preview is sealed alongside the text (encodeTextMessage is
+            // a no-op passthrough when there's no preview) rather than sent as
+            // a plaintext side-channel like mentions, so every recipient sees
+            // the exact same card with zero re-fetching. See ../CLAUDE.md's
+            // "Link previews" section.
+            let sealedPlaintext = LinkPreviewCodec.encodeTextMessage(text, linkPreview: linkPreview)
+
             let sent: DbMessage
             let sealStart = ContinuousClock.now
             let sealed = await EnvelopeEncryption.encryptForMembers(
-                plaintext: text, memberUserIds: memberIdsForEncryption(), repository: repository
+                plaintext: sealedPlaintext, memberUserIds: memberIdsForEncryption(), repository: repository
             )
             let sealMs = Self.ms(since: sealStart)
             if let sealed {
@@ -365,13 +438,24 @@ final class ChatViewModel {
                 // Phase-1 fallback: some member has zero registered devices yet.
                 let params = SendMessageParams(
                     conversationId: conversationId, senderId: currentUserId,
-                    content: Data(text.utf8).base64EncodedString(), iv: nil, type: "text",
+                    content: Data(sealedPlaintext.utf8).base64EncodedString(), iv: nil, type: "text",
                     replyToId: capturedReplyTo?.id, threadId: capturedReplyTo?.threadId,
                     mentionedUserIds: mentions.mentionedUserIds, mentionsEveryone: mentions.mentionsEveryone
                 )
                 sent = try await repository.sendMessage(params)
             }
             print("[Perf] sent \(sent.id): total \(Self.ms(since: sendStart))ms, seal \(sealMs)ms (device lookup + wrap)")
+
+            // The message already sent as plain text (never blocked on the
+            // fetch) — if a preview was still resolving, attach it once it's
+            // ready instead of discarding it.
+            if linkPreview == nil, let latePreview {
+                let messageId = sent.id
+                Task { [weak self] in
+                    guard let resolved = await latePreview.value else { return }
+                    await self?.attachLinkPreview(messageId: messageId, text: text, preview: resolved)
+                }
+            }
 
             // Realtime may have already inserted the real message before this returns
             if messages.contains(where: { $0.id == sent.id }) {
@@ -381,13 +465,41 @@ final class ChatViewModel {
                     id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
                     content: text, type: sent.type,
                     replyToId: capturedReplyTo?.id, threadId: capturedReplyTo?.threadId,
-                    createdAt: sent.createdAt
+                    createdAt: sent.createdAt, linkPreview: linkPreview
                 )
             }
         } catch {
             messages.removeAll { $0.id == tempId }
             replyToMessage = capturedReplyTo
             self.error = error.localizedDescription
+        }
+    }
+
+    // Re-seals an already-sent message once a preview that was still in
+    // flight at send time resolves. This device's own realtime subscription
+    // explicitly skips own-message updates (below), so — unlike every other
+    // client viewing this conversation — it must patch `messages` directly
+    // rather than relying on realtime at all. Silent no-op on failure,
+    // matching today's behavior when a preview fails outright.
+    private func attachLinkPreview(messageId: UUID, text: String, preview: LinkPreview) async {
+        do {
+            let sealedPlaintext = LinkPreviewCodec.encodeTextMessage(text, linkPreview: preview)
+            let memberIds = memberIdsForEncryption()
+            if let sealed = await EnvelopeEncryption.encryptForMembers(
+                plaintext: sealedPlaintext, memberUserIds: memberIds, repository: repository
+            ) {
+                let params = EditMessageWithEnvelopesParams(
+                    pMessageId: messageId, pContent: sealed.content, pIv: sealed.iv, pEnvelopes: sealed.envelopes
+                )
+                _ = try await repository.editMessageWithEnvelopes(params)
+            } else {
+                try await repository.editPhase1Content(messageId: messageId, content: sealedPlaintext)
+            }
+            if let idx = messages.firstIndex(where: { $0.id == messageId }) {
+                messages[idx].linkPreview = preview
+            }
+        } catch {
+            print("[yaply] failed to attach a late-resolved link preview: \(error)")
         }
     }
 
@@ -424,6 +536,8 @@ final class ChatViewModel {
             id: tempId, conversationId: conversationId, senderId: currentUserId,
             content: "", type: "image", mediaUrl: localKey, createdAt: Date()
         ))
+        beginPending(tempId)
+        defer { endPending(tempId) }
 
         do {
             let uploaded = try await uploadService.uploadImage(imageData, mimeType: mimeType, userId: currentUserId)
@@ -479,6 +593,8 @@ final class ChatViewModel {
             id: tempId, conversationId: conversationId, senderId: currentUserId,
             content: "", type: "gif", mediaUrl: url, createdAt: Date()
         ))
+        beginPending(tempId)
+        defer { endPending(tempId) }
 
         let params = SendMessageParams(
             conversationId: conversationId, senderId: currentUserId,
@@ -516,6 +632,8 @@ final class ChatViewModel {
             id: tempId, conversationId: conversationId, senderId: currentUserId,
             content: "", type: "sticker", mediaUrl: nil, createdAt: Date()
         ))
+        beginPending(tempId)
+        defer { endPending(tempId) }
 
         do {
             let url = try await uploadService.uploadImage(
@@ -549,6 +667,8 @@ final class ChatViewModel {
             id: tempId, conversationId: conversationId, senderId: currentUserId,
             content: "", type: "voice", mediaUrl: nil, createdAt: Date()
         ))
+        beginPending(tempId)
+        defer { endPending(tempId) }
 
         defer { try? FileManager.default.removeItem(at: fileURL) }
         do {
@@ -739,7 +859,12 @@ final class ChatViewModel {
                 filter: .eq("conversation_id", value: conversationId.uuidString)
             )
             let pinDeletes = pg.postgresChange(DeleteAction.self, schema: "public", table: "pinned_messages")
-            let readInserts = pg.postgresChange(InsertAction.self, schema: "public", table: "message_reads")
+            // Read/delivery watermarks. Filterable, unlike the old per-message
+            // `message_reads` inserts, so this only hears this conversation.
+            let memberUpdates = pg.postgresChange(
+                UpdateAction.self, schema: "public", table: "conversation_members",
+                filter: .eq("conversation_id", value: conversationId.uuidString)
+            )
             await RealtimeConnectionMonitor.subscribe(pg, label: label)
 
             // Catch up *after* the subscription is live, never before: an event landing
@@ -807,7 +932,7 @@ final class ChatViewModel {
                 // The insert itself says who read what, so it's applied in place
                 // rather than re-querying read status for every own message.
                 group.addTask {
-                    for await event in readInserts { await self.applyReadReceipt(event.record) }
+                    for await event in memberUpdates { await self.applyMemberUpdate(event.record) }
                 }
                 group.addTask { await self.runTypingChannel() }
                 group.addTask { await self.runPresenceChannel() }
@@ -869,7 +994,7 @@ final class ChatViewModel {
         await mergeLatestMessages()
         await loadPins()
         await loadReactionsForCurrentMessages()
-        await fetchReadStatus()
+        await loadWatermarks()
         await loadMyRequestState()
     }
 
@@ -884,7 +1009,7 @@ final class ChatViewModel {
     private func mergeLatestMessages() async {
         guard let (raw, _) = try? await repository.fetchMessages(conversationId: conversationId) else { return }
         merge(await decryptAll(raw))
-        await markAndFetchReceipts()
+        scheduleMarkRead()
     }
 
     /// Closes the gap between the initial page's snapshot and the channel joining.
@@ -905,7 +1030,7 @@ final class ChatViewModel {
             return
         }
         merge(await decryptAll(raw))
-        scheduleReceipts()
+        scheduleMarkRead()
     }
 
     /// Fetched rows replace their local counterparts (edits, deleted_at flips);
@@ -923,16 +1048,6 @@ final class ChatViewModel {
             $0.createdAt == $1.createdAt
                 ? $0.id.uuidString < $1.id.uuidString
                 : $0.createdAt < $1.createdAt
-        }
-    }
-
-    /// Debounced so a burst of incoming messages costs one receipts round-trip pair.
-    private func scheduleReceipts() {
-        receiptsTask?.cancel()
-        receiptsTask = Task {
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            await markAndFetchReceipts()
         }
     }
 
@@ -1033,7 +1148,13 @@ final class ChatViewModel {
             createdAt: createdAt, senderProfile: nil
         )
         let decryptStart = ContinuousClock.now
-        let (decryptedContent, failed) = await decryptDbMessage(dbMsg)
+        let (rawContent, failed) = await decryptDbMessage(dbMsg)
+        // Only type="text" ever carries a link-preview envelope; decode is a
+        // no-op (returns the string unchanged) for anything else that isn't
+        // our known JSON shape.
+        let (decryptedContent, linkPreview): (String, LinkPreview?) = (!failed && type == "text")
+            ? LinkPreviewCodec.decodeTextMessage(rawContent)
+            : (rawContent, nil)
 
         let msg = DecryptedMessage(
             id: id, conversationId: convId, senderId: senderId,
@@ -1045,14 +1166,15 @@ final class ChatViewModel {
             deletedAt: dbMsg.deletedAt,
             createdAt: createdAt,
             senderProfile: senderProfile,
-            decryptFailed: failed
+            decryptFailed: failed,
+            linkPreview: linkPreview
         )
         messages.append(msg)
         // created_at is the server's clock, so the first figure includes any skew.
         print("[Perf] received \(id): rendered \(Int(Date().timeIntervalSince(createdAt) * 1000))ms after created_at, decrypt \(Self.ms(since: decryptStart))ms")
         // Off the receive path: this is two round-trips, and awaiting it here held
         // up the next queued insert in the same `for await` loop.
-        scheduleReceipts()
+        scheduleMarkRead()
     }
 
     private func handleMessageUpdate(_ record: [String: AnyJSON]) async {
@@ -1065,8 +1187,37 @@ final class ChatViewModel {
 
         let deletedAtStr = record["deleted_at"]?.stringValue
         let deletedAt = deletedAtStr.flatMap(Self.parseRealtimeDate)
+        let editedAtStr = record["edited_at"]?.stringValue
+        let editedAt = editedAtStr.flatMap(Self.parseRealtimeDate)
 
         let m = messages[idx]
+
+        // An edited_at we haven't seen means content/iv were re-sealed (today,
+        // only to attach a late-resolved link preview — see ../CLAUDE.md's
+        // "Link previews") — re-decrypt from the fresh row instead of reusing
+        // the old content. Every other update (e.g. a plain delete) leaves
+        // content untouched, same as before.
+        if editedAt != m.editedAt, let content = record["content"]?.stringValue, let type = record["type"]?.stringValue {
+            let dbMsg = DbMessage(
+                id: id, conversationId: m.conversationId, senderId: m.senderId, content: content,
+                iv: record["iv"]?.stringValue, encV: record["enc_v"]?.intValue, type: type,
+                mediaUrl: m.mediaUrl, mediaMime: nil, replyToId: m.replyToId, threadId: m.threadId,
+                editedAt: editedAt, deletedAt: deletedAt, createdAt: m.createdAt, senderProfile: nil
+            )
+            let (rawContent, failed) = await decryptDbMessage(dbMsg)
+            let (decryptedContent, linkPreview): (String, LinkPreview?) = (!failed && type == "text")
+                ? LinkPreviewCodec.decodeTextMessage(rawContent)
+                : (rawContent, nil)
+            messages[idx] = DecryptedMessage(
+                id: m.id, conversationId: m.conversationId, senderId: m.senderId,
+                content: decryptedContent, type: m.type, mediaUrl: m.mediaUrl,
+                replyToId: m.replyToId, threadId: m.threadId, editedAt: editedAt,
+                deletedAt: deletedAt, createdAt: m.createdAt, senderProfile: m.senderProfile,
+                decryptFailed: failed, linkPreview: linkPreview
+            )
+            return
+        }
+
         messages[idx] = DecryptedMessage(
             id: m.id, conversationId: m.conversationId, senderId: m.senderId,
             content: m.content, type: m.type, mediaUrl: m.mediaUrl,
@@ -1094,17 +1245,6 @@ final class ChatViewModel {
         reactionsMap[messageId] = buildReactionGroups(from: rows)[messageId]
     }
 
-    /// `readByOtherSet` holds own messages someone else has read, so only a
-    /// receipt from another user on one of our loaded messages changes it.
-    private func applyReadReceipt(_ record: [String: AnyJSON]) {
-        guard
-            let id = loadedMessageId(record),
-            let reader = record["user_id"]?.stringValue.flatMap(UUID.init(uuidString:)),
-            reader != currentUserId,
-            layout.messagesById[id]?.senderId == currentUserId
-        else { return }
-        readByOtherSet.insert(id)
-    }
 
     private func handleProfileUpdate(_ record: [String: AnyJSON]) async {
         guard
@@ -1198,13 +1338,16 @@ final class ChatViewModel {
         var result: [DecryptedMessage] = []
         result.reserveCapacity(ordered.count)
         for msg in ordered {
-            let (content, failed) = decryptDbMessage(msg, plaintext: plaintexts[msg.id])
+            let (rawContent, failed) = decryptDbMessage(msg, plaintext: plaintexts[msg.id])
+            let (content, linkPreview): (String, LinkPreview?) = (!failed && msg.type == "text")
+                ? LinkPreviewCodec.decodeTextMessage(rawContent)
+                : (rawContent, nil)
             result.append(DecryptedMessage(
                 id: msg.id, conversationId: msg.conversationId, senderId: msg.senderId,
                 content: content, type: msg.type, mediaUrl: msg.mediaUrl,
                 replyToId: msg.replyToId, threadId: msg.threadId,
                 editedAt: msg.editedAt, deletedAt: msg.deletedAt, createdAt: msg.createdAt,
-                senderProfile: msg.senderProfile, decryptFailed: failed
+                senderProfile: msg.senderProfile, decryptFailed: failed, linkPreview: linkPreview
             ))
         }
         return result
