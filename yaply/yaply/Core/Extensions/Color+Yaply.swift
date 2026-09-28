@@ -45,14 +45,15 @@ extension Color {
         light: Color(red: 0.102, green: 0.153, blue: 0.267),
         dark: Color(red: 0.914, green: 0.933, blue: 0.984)
     )
-    // #5b8def — blue accent, buttons, highlights. Same value in both
-    // themes on the web (`--primary` doesn't change under `:root`) —
-    // intentionally has no dark override, don't "fix" this.
-    static let yaplyAccent = Color(red: 0.357, green: 0.553, blue: 0.937)
-    // #4a7de4 / #3b6fe0 — gradient end-stop for own-message bubbles, FAB, avatars
+    // #0084FF — Messenger brand blue accent, buttons, highlights.
+    // Retinted for ui/messenger-style (was #5b8def); intentionally has no
+    // dark override, matching the original token's behavior.
+    static let yaplyAccent = Color(red: 0.000, green: 0.518, blue: 1.000)
+    // #0078E8 / #0068CC — gradient end-stop for own-message bubbles, FAB,
+    // avatars. Retinted for ui/messenger-style (was #4a7de4 / #3b6fe0).
     static let yaplyAccentDark = Color(
-        light: Color(red: 0.290, green: 0.490, blue: 0.894),
-        dark: Color(red: 0.231, green: 0.435, blue: 0.878)
+        light: Color(red: 0.000, green: 0.471, blue: 0.910),
+        dark: Color(red: 0.000, green: 0.408, blue: 0.800)
     )
     // #dce7f8 / rgba(143,184,255,.14) — borders, dividers
     static let yaplyBorder = Color(
@@ -74,10 +75,12 @@ extension Color {
         light: .white,
         dark: Color(red: 0.039, green: 0.067, blue: 0.125)
     )
-    // #ffffff / #0d1526 — card fill (other-message bubbles, list cards)
+    // #F0F0F0 / #1C1C1E — card fill (other-message bubbles, list cards).
+    // Retinted for ui/messenger-style (was #ffffff / #0d1526) to a neutral
+    // gray matching Messenger's received-bubble color.
     static let yaplyCard = Color(
-        light: .white,
-        dark: Color(red: 0.051, green: 0.082, blue: 0.149)
+        light: Color(red: 0.941, green: 0.941, blue: 0.941),
+        dark: Color(red: 0.110, green: 0.110, blue: 0.118)
     )
     // #f3f7ff / rgba(143,184,255,.08) — tinted fill: search bars, reply
     // quotes, system-message pills, command-feedback banners
