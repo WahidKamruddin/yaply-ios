@@ -151,6 +151,24 @@ struct MessageInputView: View {
         mentionDismissedForQuery = nil
     }
 
+    /// Text-field container shape: a true capsule for iMessage, a rounded
+    /// rect (Messenger's is a touch tighter than yaply's default) otherwise.
+    private var textFieldShape: AnyShape {
+        switch ChatStyle.current {
+        case .imessage: return AnyShape(Capsule())
+        case .messenger: return AnyShape(RoundedRectangle(cornerRadius: 20))
+        case .yaply: return AnyShape(RoundedRectangle(cornerRadius: 22))
+        }
+    }
+
+    /// Composer bar background: flat surface color for yaply/Messenger,
+    /// translucent blur for iMessage, matching its composer chrome.
+    private var composerBarBackground: AnyShapeStyle {
+        ChatStyle.current == .imessage
+            ? AnyShapeStyle(.ultraThinMaterial)
+            : AnyShapeStyle(Color.yaplySurface)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if let reply = replyTo {
@@ -300,9 +318,9 @@ struct MessageInputView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.yaplySurface)
-                .clipShape(RoundedRectangle(cornerRadius: 22))
+                .clipShape(textFieldShape)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 22)
+                    textFieldShape
                         .stroke(isFocused ? Color.yaplyAccent.opacity(0.5) : Color.yaplyBorder,
                                 lineWidth: isFocused ? 1.5 : 1)
                 )
@@ -313,7 +331,7 @@ struct MessageInputView: View {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     performSend()
                 }) {
-                    Image(systemName: "message.fill")
+                    Image(systemName: ChatStyle.current == .imessage ? "arrow.up" : "message.fill")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 32, height: 32)
@@ -328,8 +346,13 @@ struct MessageInputView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(Color.yaplySurface)
-            .overlay(Rectangle().fill(Color.yaplyBorder).frame(height: 1), alignment: .top)
+            .background(composerBarBackground)
+            .overlay(
+                Rectangle()
+                    .fill(Color.yaplyBorder.opacity(ChatStyle.current == .imessage ? 0.5 : 1))
+                    .frame(height: 1),
+                alignment: .top
+            )
         }
         .onChange(of: isFocused) { _, focused in
             if focused, menuExpanded {

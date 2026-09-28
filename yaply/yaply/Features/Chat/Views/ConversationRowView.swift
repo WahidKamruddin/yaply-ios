@@ -16,6 +16,15 @@ struct ConversationRowView: View {
     }
     private var isMentionOnlyBadge: Bool { item.isMuted && displayUnreadCount > 0 }
 
+    // Messenger's list reads slightly roomier; iMessage's is more compact.
+    private var rowVerticalPadding: CGFloat {
+        switch ChatStyle.current {
+        case .yaply: return 10
+        case .messenger: return 12
+        case .imessage: return 8
+        }
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             // Avatar
@@ -67,7 +76,7 @@ struct ConversationRowView: View {
                 }
             }
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, rowVerticalPadding)
         .padding(.horizontal, 16)
         .background(.clear)
         // Whole row is the tap target, not just the avatar and text: a clear
