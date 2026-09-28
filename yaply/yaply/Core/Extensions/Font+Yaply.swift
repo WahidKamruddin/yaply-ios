@@ -35,4 +35,16 @@ extension Font {
         // font.
         return Font.system(size: size, weight: weight, design: .rounded)
     }
+
+    /// Heading/identity text that respects the selected `ChatStyle`: the
+    /// branded display face for `.yaply`/`.messenger`, plain system font for
+    /// `.imessage` — real iMessage uses San Francisco everywhere with no
+    /// custom display face, which is a defining part of its look. Every
+    /// call site that previously called `.display(...)` for chat-adjacent
+    /// heading text should call this instead.
+    static func chatDisplay(_ size: CGFloat, weight: Font.Weight = .bold) -> Font {
+        ChatStyle.current == .imessage
+            ? .system(size: size, weight: weight)
+            : .display(size, weight: weight)
+    }
 }

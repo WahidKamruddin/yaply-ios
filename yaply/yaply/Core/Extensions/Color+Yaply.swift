@@ -45,15 +45,37 @@ extension Color {
         light: Color(red: 0.102, green: 0.153, blue: 0.267),
         dark: Color(red: 0.914, green: 0.933, blue: 0.984)
     )
-    // #5b8def — blue accent, buttons, highlights. Same value in both
-    // themes on the web (`--primary` doesn't change under `:root`) —
-    // intentionally has no dark override, don't "fix" this.
-    static let yaplyAccent = Color(red: 0.357, green: 0.553, blue: 0.937)
-    // #4a7de4 / #3b6fe0 — gradient end-stop for own-message bubbles, FAB, avatars
-    static let yaplyAccentDark = Color(
-        light: Color(red: 0.290, green: 0.490, blue: 0.894),
-        dark: Color(red: 0.231, green: 0.435, blue: 0.878)
-    )
+    // Blue accent, buttons, highlights. Style-dependent: #5b8def (yaply,
+    // same both themes), #0084FF (Messenger, same both themes), #0b93f6
+    // (iMessage, same both themes) — none of the three have a dark
+    // override, don't "fix" this.
+    static var yaplyAccent: Color {
+        switch ChatStyle.current {
+        case .yaply: return Color(red: 0.357, green: 0.553, blue: 0.937)
+        case .messenger: return Color(red: 0.000, green: 0.518, blue: 1.000)
+        case .imessage: return Color(red: 0.043, green: 0.576, blue: 0.965)
+        }
+    }
+    // Gradient end-stop for own-message bubbles, FAB, avatars.
+    // Style-dependent: #4a7de4/#3b6fe0 (yaply), #0078E8/#0068CC (Messenger),
+    // #0a7cff same both themes (iMessage, completes its documented
+    // #0b93f6 -> #0a7cff bubble gradient).
+    static var yaplyAccentDark: Color {
+        switch ChatStyle.current {
+        case .yaply:
+            return Color(
+                light: Color(red: 0.290, green: 0.490, blue: 0.894),
+                dark: Color(red: 0.231, green: 0.435, blue: 0.878)
+            )
+        case .messenger:
+            return Color(
+                light: Color(red: 0.000, green: 0.471, blue: 0.910),
+                dark: Color(red: 0.000, green: 0.408, blue: 0.800)
+            )
+        case .imessage:
+            return Color(red: 0.039, green: 0.486, blue: 1.000)
+        }
+    }
     // #dce7f8 / rgba(143,184,255,.14) — borders, dividers
     static let yaplyBorder = Color(
         light: Color(red: 0.863, green: 0.906, blue: 0.973),
@@ -64,21 +86,49 @@ extension Color {
         light: Color(red: 0.941, green: 0.957, blue: 0.988),
         dark: Color(red: 0.561, green: 0.722, blue: 1.0).opacity(0.10)
     )
-    // #edf1fa / #070d1a — page background
-    static let yaplyBackground = Color(
-        light: Color(red: 0.929, green: 0.945, blue: 0.980),
-        dark: Color(red: 0.027, green: 0.051, blue: 0.102)
-    )
-    // #ffffff / #0a1120 — elevated surface (rows, headers, sheets)
+    // Page background. Style-dependent: #edf1fa/#070d1a (yaply, tinted),
+    // white/black (Messenger and iMessage, both match their real apps'
+    // neutral chat canvas).
+    static var yaplyBackground: Color {
+        switch ChatStyle.current {
+        case .yaply:
+            return Color(
+                light: Color(red: 0.929, green: 0.945, blue: 0.980),
+                dark: Color(red: 0.027, green: 0.051, blue: 0.102)
+            )
+        case .messenger, .imessage:
+            return Color(light: .white, dark: .black)
+        }
+    }
+    // #ffffff / #0a1120 — elevated surface (rows, headers, sheets). Not
+    // style-dependent — only bubble/accent colors and page background
+    // change between styles.
     static let yaplySurface = Color(
         light: .white,
         dark: Color(red: 0.039, green: 0.067, blue: 0.125)
     )
-    // #ffffff / #0d1526 — card fill (other-message bubbles, list cards)
-    static let yaplyCard = Color(
-        light: .white,
-        dark: Color(red: 0.051, green: 0.082, blue: 0.149)
-    )
+    // Card fill (other-message bubbles, list cards). Style-dependent:
+    // #ffffff/#0d1526 (yaply), #F0F0F0/#1C1C1E (Messenger, neutral gray),
+    // #E5E5EA/#26262A (iMessage, exact incoming-bubble gray).
+    static var yaplyCard: Color {
+        switch ChatStyle.current {
+        case .yaply:
+            return Color(
+                light: .white,
+                dark: Color(red: 0.051, green: 0.082, blue: 0.149)
+            )
+        case .messenger:
+            return Color(
+                light: Color(red: 0.941, green: 0.941, blue: 0.941),
+                dark: Color(red: 0.110, green: 0.110, blue: 0.118)
+            )
+        case .imessage:
+            return Color(
+                light: Color(red: 0.898, green: 0.898, blue: 0.918),
+                dark: Color(red: 0.149, green: 0.149, blue: 0.165)
+            )
+        }
+    }
     // #f3f7ff / rgba(143,184,255,.08) — tinted fill: search bars, reply
     // quotes, system-message pills, command-feedback banners
     static let yaplyTint = Color(

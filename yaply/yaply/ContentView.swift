@@ -6,6 +6,7 @@ struct ContentView: View {
     @Environment(AppRouter.self) private var router
     @Environment(NotificationManager.self) private var notifications
     @AppStorage("appearanceMode") private var appearanceMode: AppearanceMode = .system
+    @AppStorage(ChatStyle.storageKey) private var chatStyle: ChatStyle = .yaply
     @State private var suggestedUsername: String?
     // Signs this install out the moment it's revoked from another device,
     // rather than leaving it usable until its access token expires.
@@ -101,6 +102,13 @@ struct ContentView: View {
                     destinationView(for: route, userId: userId)
                 }
         }
+        // A chat-style change swaps colors/fonts/geometry read from static
+        // helpers (Color+Yaply, Font+Yaply, BubbleGeometry, NavChrome), which
+        // aren't independently observable. Giving the stack a fresh identity
+        // forces every visible screen to re-evaluate its body against the new
+        // style. `path` itself lives in `router` (not local @State), so the
+        // user's navigation position survives the remount.
+        .id(chatStyle)
     }
 
     @ViewBuilder
