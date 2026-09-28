@@ -135,7 +135,7 @@ struct NewConversationView: View {
                 }
             }
             .navigationTitle(isGroup ? "New Group" : "New Message")
-            .navigationBarTitleDisplayMode(.inline)
+            .navChrome()
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if isCreating {

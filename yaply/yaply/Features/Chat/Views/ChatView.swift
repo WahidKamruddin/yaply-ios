@@ -492,30 +492,25 @@ struct ChatView: View {
             messageToDelete = nil
         }
         .navigationTitle(displayName)
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .toolbar {
+            // iMessage-style compact header: avatar above the name, both
+            // centered, rather than avatar-beside-name.
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 8) {
+                VStack(spacing: 2) {
                     ZStack(alignment: .bottomTrailing) {
                         AvatarView(
                             url: vm.isGroupConversation ? nil : currentOtherMember?.profile.avatarUrl,
                             name: displayName,
-                            size: 36
+                            size: 32
                         )
                         if !vm.isGroupConversation && currentOtherMember != nil {
-                            PresenceDotView(isOnline: isOnline, borderColor: .yaplySurface, size: 9)
+                            PresenceDotView(isOnline: isOnline, borderColor: .yaplySurface, size: 8)
                         }
                     }
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(displayName)
-                            .font(.display(16, weight: .semibold))
-                            .foregroundStyle(Color.yaplyPrimary)
-                        if !vm.isGroupConversation && currentOtherMember != nil {
-                            Text(isOnline ? "Online" : "Offline")
-                                .font(.caption2)
-                                .foregroundStyle(isOnline ? Color.yaplyOnline : Color.yaplySecondary)
-                        }
-                    }
+                    Text(displayName)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.yaplyPrimary)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { showGroupInfo = true }
@@ -962,7 +957,7 @@ private struct HelpView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Commands")
-            .navigationBarTitleDisplayMode(.inline)
+            .navChrome()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }

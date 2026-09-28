@@ -72,7 +72,7 @@ struct TaskListView: View {
             }
         }
         .navigationTitle("Tasks")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: { showAdd = true }) {

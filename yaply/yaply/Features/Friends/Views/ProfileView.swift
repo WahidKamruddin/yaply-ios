@@ -69,7 +69,7 @@ struct ProfileView: View {
                         .foregroundStyle(Color.yaplySecondary)
                 }
             }
-            .navigationBarTitleDisplayMode(.inline)
+            .navChrome()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }

@@ -45,7 +45,7 @@ struct BudgetDetailView: View {
             }
         }
         .navigationTitle(vm.budget?.name ?? "Budget")
-        .navigationBarTitleDisplayMode(.inline)
+        .navChrome()
         .toolbar { toolbar }
         .task {
             await vm.load()

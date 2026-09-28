@@ -31,7 +31,7 @@ struct EmojiPickerSheet: View {
             }
             .background(Color.yaplyBackground)
             .navigationTitle("Choose an emoji")
-            .navigationBarTitleDisplayMode(.inline)
+            .navChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
