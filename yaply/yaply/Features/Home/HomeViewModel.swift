@@ -29,10 +29,23 @@ final class HomeViewModel {
         .map { $0 }
     }
 
-    func load(userId: UUID) async {
-        isLoading = true
-        defer { isLoading = false }
+    // Skeletons only on the first load. On pull-to-refresh, swapping the
+    // cards for skeletons re-lays out the ScrollView and SwiftUI cancels the
+    // .refreshable task mid-fetch — every `try?` then returned nil and the
+    // dashboard went blank until the next .task (e.g. Chats → Home).
+    private var hasLoaded = false
 
+    func load(userId: UUID) async {
+        if !hasLoaded { isLoading = true }
+        // Unstructured so a cancelled caller (.refreshable / .task) can't
+        // cancel the fetches out from under us.
+        await Task { await fetch(userId: userId) }.value
+        hasLoaded = true
+        isLoading = false
+    }
+
+    // A failed fetch keeps the previous value rather than blanking the card.
+    private func fetch(userId: UUID) async {
         async let remindersFetch = try? reminderRepo.fetchAllPending()
         async let eventsFetch = try? eventRepo.fetchAllRecent()
         async let notesFetch = try? noteRepo.fetchAllRecent()
@@ -45,11 +58,13 @@ final class HomeViewModel {
             .execute()
             .value
 
-        reminders = await remindersFetch ?? []
-        events = await eventsFetch ?? []
-        notes = await notesFetch ?? []
-        friends = (await friendsFetch ?? []).sorted { $0.profile.name.localizedCaseInsensitiveCompare($1.profile.name) == .orderedAscending }
-        displayName = await profileFetch?.name ?? ""
+        if let r = await remindersFetch { reminders = r }
+        if let e = await eventsFetch { events = e }
+        if let n = await notesFetch { notes = n }
+        if let f = await friendsFetch {
+            friends = f.sorted { $0.profile.name.localizedCaseInsensitiveCompare($1.profile.name) == .orderedAscending }
+        }
+        if let p = await profileFetch { displayName = p.name }
     }
 
     // Opens the existing DM with this friend, creating one if none exists yet.
