@@ -34,7 +34,7 @@ struct ConversationRowView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
                     Text(displayName)
-                        .font(.display(15, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.yaplyPrimary)
                         .lineLimit(1)
                     Spacer()
@@ -67,7 +67,7 @@ struct ConversationRowView: View {
                 }
             }
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
         .padding(.horizontal, 16)
         .background(.clear)
         // Whole row is the tap target, not just the avatar and text: a clear

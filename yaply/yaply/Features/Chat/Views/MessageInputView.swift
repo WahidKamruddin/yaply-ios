@@ -300,9 +300,9 @@ struct MessageInputView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.yaplySurface)
-                .clipShape(RoundedRectangle(cornerRadius: 22))
+                .clipShape(Capsule())
                 .overlay(
-                    RoundedRectangle(cornerRadius: 22)
+                    Capsule()
                         .stroke(isFocused ? Color.yaplyAccent.opacity(0.5) : Color.yaplyBorder,
                                 lineWidth: isFocused ? 1.5 : 1)
                 )
@@ -313,7 +313,7 @@ struct MessageInputView: View {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     performSend()
                 }) {
-                    Image(systemName: "message.fill")
+                    Image(systemName: "arrow.up")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 32, height: 32)
@@ -328,8 +328,8 @@ struct MessageInputView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(Color.yaplySurface)
-            .overlay(Rectangle().fill(Color.yaplyBorder).frame(height: 1), alignment: .top)
+            .background(.ultraThinMaterial)
+            .overlay(Rectangle().fill(Color.yaplyBorder.opacity(0.5)).frame(height: 1), alignment: .top)
         }
         .onChange(of: isFocused) { _, focused in
             if focused, menuExpanded {
