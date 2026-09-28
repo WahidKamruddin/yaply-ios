@@ -45,15 +45,15 @@ extension Color {
         light: Color(red: 0.102, green: 0.153, blue: 0.267),
         dark: Color(red: 0.914, green: 0.933, blue: 0.984)
     )
-    // #5b8def — blue accent, buttons, highlights. Same value in both
-    // themes on the web (`--primary` doesn't change under `:root`) —
-    // intentionally has no dark override, don't "fix" this.
-    static let yaplyAccent = Color(red: 0.357, green: 0.553, blue: 0.937)
-    // #4a7de4 / #3b6fe0 — gradient end-stop for own-message bubbles, FAB, avatars
-    static let yaplyAccentDark = Color(
-        light: Color(red: 0.290, green: 0.490, blue: 0.894),
-        dark: Color(red: 0.231, green: 0.435, blue: 0.878)
-    )
+    // #0b93f6 — iMessage blue accent, buttons, highlights. Retinted for
+    // ui/imessage-style (was #5b8def); intentionally has no dark override,
+    // matching the original token's behavior.
+    static let yaplyAccent = Color(red: 0.043, green: 0.576, blue: 0.965)
+    // #0a7cff — gradient end-stop for own-message bubbles, FAB, avatars.
+    // Retinted for ui/imessage-style (was #4a7de4 / #3b6fe0) to complete
+    // iMessage's documented #0b93f6 -> #0a7cff bubble gradient; same value
+    // both themes, matching real iMessage.
+    static let yaplyAccentDark = Color(red: 0.039, green: 0.486, blue: 1.000)
     // #dce7f8 / rgba(143,184,255,.14) — borders, dividers
     static let yaplyBorder = Color(
         light: Color(red: 0.863, green: 0.906, blue: 0.973),
@@ -64,20 +64,24 @@ extension Color {
         light: Color(red: 0.941, green: 0.957, blue: 0.988),
         dark: Color(red: 0.561, green: 0.722, blue: 1.0).opacity(0.10)
     )
-    // #edf1fa / #070d1a — page background
+    // #FFFFFF / #000000 — page background. Retinted for ui/imessage-style
+    // (was #edf1fa / #070d1a) to a neutral white/true-black chat canvas,
+    // matching Messages.app instead of yaply's tinted default.
     static let yaplyBackground = Color(
-        light: Color(red: 0.929, green: 0.945, blue: 0.980),
-        dark: Color(red: 0.027, green: 0.051, blue: 0.102)
+        light: .white,
+        dark: .black
     )
     // #ffffff / #0a1120 — elevated surface (rows, headers, sheets)
     static let yaplySurface = Color(
         light: .white,
         dark: Color(red: 0.039, green: 0.067, blue: 0.125)
     )
-    // #ffffff / #0d1526 — card fill (other-message bubbles, list cards)
+    // #E5E5EA / #26262A — card fill (other-message bubbles, list cards).
+    // Retinted for ui/imessage-style (was #ffffff / #0d1526) to iMessage's
+    // exact incoming-bubble gray, both themes.
     static let yaplyCard = Color(
-        light: .white,
-        dark: Color(red: 0.051, green: 0.082, blue: 0.149)
+        light: Color(red: 0.898, green: 0.898, blue: 0.918),
+        dark: Color(red: 0.149, green: 0.149, blue: 0.165)
     )
     // #f3f7ff / rgba(143,184,255,.08) — tinted fill: search bars, reply
     // quotes, system-message pills, command-feedback banners
