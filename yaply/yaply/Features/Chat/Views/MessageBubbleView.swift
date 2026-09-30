@@ -390,12 +390,18 @@ struct MessageBubbleView: View, Equatable {
     /// Small circular badges overlapping the bubble's outer-top corner,
     /// tapback-style. yaply supports multiple simultaneous reactions per
     /// message (unlike classic iMessage's single-glyph tapback), so more
-    /// than one badge stacks diagonally rather than hiding information.
+    /// than one badge stacks diagonally rather than hiding information —
+    /// capped at 3 plus an overflow "+N" badge so a heavily-reacted message
+    /// doesn't smear an unreadable stack of circles off the bubble corner.
+    private static let maxVisibleTapbacks = 3
+
     @ViewBuilder
     private var tapbackBadges: some View {
         if !reactions.isEmpty {
+            let visible = Array(reactions.prefix(Self.maxVisibleTapbacks))
+            let overflow = reactions.count - visible.count
             ZStack {
-                ForEach(Array(reactions.enumerated()), id: \.element.id) { index, group in
+                ForEach(Array(visible.enumerated()), id: \.element.id) { index, group in
                     Button { onReact?(message.id, group.emoji) } label: {
                         Text(group.emoji)
                             .font(.system(size: 13))
@@ -406,7 +412,18 @@ struct MessageBubbleView: View, Equatable {
                     }
                     .buttonStyle(.plain)
                     .offset(x: CGFloat(index) * 6, y: CGFloat(index) * 6)
-                    .zIndex(Double(reactions.count - index))
+                    .zIndex(Double(visible.count - index))
+                }
+                if overflow > 0 {
+                    Text("+\(overflow)")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.yaplySecondary)
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(Color.yaplySurface))
+                        .overlay(Circle().stroke(Color.yaplyBorder, lineWidth: 0.5))
+                        .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
+                        .offset(x: CGFloat(visible.count) * 6, y: CGFloat(visible.count) * 6)
+                        .zIndex(0)
                 }
             }
         }
