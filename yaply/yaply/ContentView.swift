@@ -108,7 +108,13 @@ struct ContentView: View {
         // forces every visible screen to re-evaluate its body against the new
         // style. `path` itself lives in `router` (not local @State), so the
         // user's navigation position survives the remount.
+        //
+        // .id() swaps are an instant cut with no interpolation of their own,
+        // so the crossfade comes from a plain opacity transition; the actual
+        // animation is driven by AccountSettingsView wrapping its write to
+        // `chatStyle` in withAnimation.
         .id(chatStyle)
+        .transition(.opacity)
     }
 
     @ViewBuilder

@@ -272,12 +272,31 @@ struct AccountSettingsView: View {
         }
     }
 
+    /// Wraps the `chatStyle` write in `withAnimation` so the crossfade on
+    /// `ContentView`'s `.id(chatStyle)` root actually animates — a plain
+    /// `$chatStyle` binding changes the value outside any animation
+    /// transaction, so the swap would still be an instant cut.
+    private var animatedChatStyleBinding: Binding<ChatStyle> {
+        Binding(
+            get: { chatStyle },
+            set: { newValue in
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    chatStyle = newValue
+                }
+            }
+        )
+    }
+
     private var chatStyleSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Chat style").font(.caption).foregroundStyle(Color.yaplySecondary)
-            Picker("Chat style", selection: $chatStyle) {
+            Picker("Chat style", selection: animatedChatStyleBinding) {
                 ForEach(ChatStyle.allCases) { style in
-                    Text(style.label).tag(style)
+                    HStack(spacing: 5) {
+                        Circle().fill(style.accentPreview).frame(width: 8, height: 8)
+                        Text(style.label)
+                    }
+                    .tag(style)
                 }
             }
             .pickerStyle(.segmented)

@@ -18,6 +18,19 @@ enum ChatStyle: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Each style's own accent color, regardless of which style is
+    /// currently active — unlike `Color.yaplyAccent` (which always reflects
+    /// `.current`), this is for previewing an option in the Settings picker
+    /// before it's selected. Kept in sync with `Color.yaplyAccent`'s
+    /// per-style values in Color+Yaply.swift.
+    var accentPreview: Color {
+        switch self {
+        case .yaply: return Color(red: 0.357, green: 0.553, blue: 0.937)
+        case .messenger: return Color(red: 0.000, green: 0.518, blue: 1.000)
+        case .imessage: return Color(red: 0.043, green: 0.576, blue: 0.965)
+        }
+    }
+
     static let storageKey = "chatStyle"
 
     /// Reads the persisted preference directly, for use in static
