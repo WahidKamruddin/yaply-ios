@@ -51,6 +51,13 @@ struct ChatView: View {
     // point-in-time reads, so nothing needs to observe the writes.
     @State private var anchorStore = BubbleAnchorStore()
     @State private var hasScrolledInitially = false
+    /// True once `vm.onAppear()` has merged the first page; the scroll view is built then.
+    @State private var initialLoadDone = false
+    /// Until the user first touches the list (or jumps elsewhere), content-height
+    /// changes keep it pinned to the bottom. Media rows (GIFs/images) settle to their
+    /// real height after the first layout, which otherwise leaves the newest messages
+    /// below the viewport.
+    @State private var stickToBottom = true
     @State private var scrollProxy: ScrollViewProxy?
     @State private var scrollViewFrame: CGRect = .zero
     // `.scrollDismissesKeyboard(.interactively)` treats ANY content-offset change
@@ -151,7 +158,12 @@ struct ChatView: View {
                             if vm.hasMore {
                                 ProgressView()
                                     .padding()
-                                    .onAppear { Task { await vm.loadOlderMessages() } }
+                                    .onAppear {
+                                        // Not until the newest page is loaded and pinned to
+                                        // the bottom; the list is at the top while it populates.
+                                        guard hasScrolledInitially else { return }
+                                        Task { await vm.loadOlderMessages() }
+                                    }
                             }
 
                             let layout = layout
@@ -239,6 +251,15 @@ struct ChatView: View {
                             }
                         }
                     }
+                    .onScrollGeometryChange(for: CGFloat.self) { geo in
+                        geo.contentSize.height
+                    } action: { old, new in
+                        guard stickToBottom, initialLoadDone, new != old else { return }
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                    .onScrollPhaseChange { _, phase in
+                        if phase == .interacting { stickToBottom = false }
+                    }
                     .overlay(alignment: .bottomTrailing) {
                         if showScrollButton {
                             ZStack(alignment: .topTrailing) {
@@ -295,6 +316,7 @@ struct ChatView: View {
                     }
                     .onChange(of: scrollToId) { _, id in
                         guard let id else { return }
+                        stickToBottom = false
                         withAnimation { proxy.scrollTo(rowId(for: id), anchor: .center) }
                         scrollToId = nil
                         highlightedId = id
@@ -309,19 +331,29 @@ struct ChatView: View {
                             ProgressView()
                         }
                     }
+                    // The scroll view is rebuilt (`.id`) once the first page is merged, so
+                    // its first layout already holds the newest messages and starts at the
+                    // bottom. Chasing the bottom with scrollTo(id) on an initially empty
+                    // LazyVStack resolved against estimated row heights and landed short.
+                    // `.initialOffset` only: a plain anchor would also re-pin on keyboard
+                    // resizes and when older pages are prepended.
+                    .defaultScrollAnchor(.bottom, for: .initialOffset)
                     .task {
                         scrollProxy = proxy
-                        vm.currentUsername = currentUsername
-                        newMsgCount = 0
-                        await vm.onAppear()
-                        // Wait a run-loop tick so the newly-populated LazyVStack has actually
-                        // laid out before we scroll, then reveal the list — otherwise scrollTo
-                        // resolves against stale layout and the top of the list flashes first.
+                        guard initialLoadDone else { return }
+                        // Safety net only; the anchor above does the positioning.
                         proxy.scrollTo("bottom", anchor: .bottom)
                         try? await Task.sleep(nanoseconds: 50_000_000)
                         proxy.scrollTo("bottom", anchor: .bottom)
                         hasScrolledInitially = true
                     }
+                    .id(initialLoadDone)
+                }
+                .task {
+                    vm.currentUsername = currentUsername
+                    newMsgCount = 0
+                    await vm.onAppear()
+                    initialLoadDone = true
                 }
 
                 // Command feedback banner
@@ -776,7 +808,8 @@ struct ChatView: View {
     }
 
     private func handleMessageCountChange(proxy: ScrollViewProxy) {
-        guard let last = vm.messages.last else { return }
+        // The initial `.task` owns first positioning; don't race it with an animated scroll.
+        guard hasScrolledInitially, let last = vm.messages.last else { return }
         if let flight = flightStore.flight, flight.rowId == last.rowId {
             // The flight measures the bubble's final on-screen frame, so the
             // list has to be at rest there — no animated scroll underneath it.

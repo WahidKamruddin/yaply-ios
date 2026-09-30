@@ -150,7 +150,21 @@ final class ChatViewModel {
 
     func loadMessages() async {
         do {
-            let (raw, cursor) = try await repository.fetchMessages(conversationId: conversationId)
+            // The view positions itself once this returns, so a transient failure
+            // must not reveal an empty/partial list: retry before giving up.
+            var attempt = 0
+            var page: (messages: [DbMessage], nextCursor: Date?)
+            while true {
+                do {
+                    page = try await repository.fetchMessages(conversationId: conversationId)
+                    break
+                } catch {
+                    attempt += 1
+                    if attempt >= 3 || Task.isCancelled { throw error }
+                    try? await Task.sleep(for: .seconds(attempt))
+                }
+            }
+            let (raw, cursor) = page
             nextCursor = cursor
             hasMore = cursor != nil
             newestFetchedAt = raw.first?.createdAt
