@@ -46,27 +46,15 @@ struct ChatView: View {
     @State private var messageToDelete: UUID?
     // Deliberately a reference box and not @State. Bubble frames change on
     // every scroll frame, so publishing them into view state re-evaluated this
-    // body continuously. Both readers (the long-press overlay anchor, and the
-    // "keep this bubble visible" lookup when the keyboard opens) are
-    // point-in-time reads, so nothing needs to observe the writes.
+    // body continuously. Its readers (the long-press overlay anchor and the
+    // send flight) are point-in-time reads, so nothing needs to observe the writes.
     @State private var anchorStore = BubbleAnchorStore()
     @State private var hasScrolledInitially = false
     /// True once `vm.onAppear()` has merged the first page; the scroll view is built then.
     @State private var initialLoadDone = false
-    /// Until the user first touches the list (or jumps elsewhere), content-height
-    /// changes keep it pinned to the bottom. Media rows (GIFs/images) settle to their
-    /// real height after the first layout, which otherwise leaves the newest messages
-    /// below the viewport.
-    @State private var stickToBottom = true
     @State private var scrollProxy: ScrollViewProxy?
-    @State private var scrollViewFrame: CGRect = .zero
-    // `.scrollDismissesKeyboard(.interactively)` treats ANY content-offset change
-    // on this ScrollView -- not just a user drag -- as a cue to interactively
-    // dismiss the keyboard, which also resigns the just-focused TextField. Our
-    // own focus-triggered scrollTo (below) was tripping that, so the keyboard
-    // would appear then get yanked back down instantly. Disabled for the
-    // duration of that one programmatic scroll.
-    @State private var suppressInteractiveKeyboardDismiss = false
+    /// How far the keyboard pushes the list and composer up. A reference, read only by `KeyboardLift`.
+    @State private var keyboardLift = KeyboardLiftStore()
     /// The text send currently flying from the composer into its bubble. A
     /// reference store, not a SendFlight @State: only the overlay and the
     /// hidden row observe it, so a flight never re-evaluates this body.
@@ -152,335 +140,317 @@ struct ChatView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            if vm.hasMore {
-                                ProgressView()
-                                    .padding()
-                                    .onAppear {
-                                        // Not until the newest page is loaded and pinned to
-                                        // the bottom; the list is at the top while it populates.
-                                        guard hasScrolledInitially else { return }
-                                        Task { await vm.loadOlderMessages() }
+                // The keyboard never resizes the list (see `ignoresSafeArea(.keyboard)`
+                // below). Resizing it made SwiftUI re-position a LazyVStack of estimated
+                // row heights on every frame of the keyboard animation, which scrolled
+                // through the history and back. Instead the list and composer slide up
+                // together by the keyboard's height, like one rigid block, so whatever
+                // is on screen stays directly above the composer, anywhere in the history.
+                VStack(spacing: 0) {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                if vm.hasMore {
+                                    ProgressView()
+                                        .padding()
+                                        .onAppear {
+                                            // Not until the newest page is loaded and pinned to
+                                            // the bottom; the list is at the top while it populates.
+                                            guard hasScrolledInitially else { return }
+                                            Task { await vm.loadOlderMessages() }
+                                        }
+                                }
+
+                                let layout = layout
+                                ForEach(layout.groups) { group in
+                                    DateSeparatorView(date: group.date)
+                                    // Keyed by rowId so an own send keeps its identity when the
+                                    // server confirms it (temp id → real id). See SendFlight.
+                                    ForEach(group.messages, id: \.rowId) { msg in
+                                        messageRow(
+                                            msg,
+                                            layout: layout,
+                                            position: layout.positions[msg.id] ?? .single,
+                                            startsNewSpeaker: layout.newSpeakerIds.contains(msg.id)
+                                        )
                                     }
-                            }
-
-                            let layout = layout
-                            ForEach(layout.groups) { group in
-                                DateSeparatorView(date: group.date)
-                                // Keyed by rowId so an own send keeps its identity when the
-                                // server confirms it (temp id → real id). See SendFlight.
-                                ForEach(group.messages, id: \.rowId) { msg in
-                                    messageRow(
-                                        msg,
-                                        layout: layout,
-                                        position: layout.positions[msg.id] ?? .single,
-                                        startsNewSpeaker: layout.newSpeakerIds.contains(msg.id)
-                                    )
                                 }
-                            }
 
-                            if !vm.typingUserIds.isEmpty {
-                                // In a DM there's only one person who could ever be typing, so
-                                // use the same currentOtherMember lookup the header avatar
-                                // already relies on rather than matching the broadcast's userId
-                                // against the member list — one less thing that has to line up
-                                // exactly. Groups still need the id-based lookup since there's
-                                // more than one possible typer.
-                                let typingMember = vm.isGroupConversation
-                                    ? vm.conversationMembers.first(where: {
-                                        $0.userId.uuidString.lowercased() == vm.typingUserIds.first?.lowercased()
-                                    })
-                                    : currentOtherMember
-                                HStack(alignment: .bottom, spacing: 8) {
-                                    AvatarView(
-                                        url: typingMember?.profile.avatarUrl,
-                                        name: typingMember?.profile.name ?? "?",
-                                        size: 28
-                                    )
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("placeholder")
-                                            .font(.caption)
-                                            .fontWeight(.medium)
-                                            .hidden()
-                                        TypingBubbleView()
+                                if !vm.typingUserIds.isEmpty {
+                                    // In a DM there's only one person who could ever be typing, so
+                                    // use the same currentOtherMember lookup the header avatar
+                                    // already relies on rather than matching the broadcast's userId
+                                    // against the member list — one less thing that has to line up
+                                    // exactly. Groups still need the id-based lookup since there's
+                                    // more than one possible typer.
+                                    let typingMember = vm.isGroupConversation
+                                        ? vm.conversationMembers.first(where: {
+                                            $0.userId.uuidString.lowercased() == vm.typingUserIds.first?.lowercased()
+                                        })
+                                        : currentOtherMember
+                                    HStack(alignment: .bottom, spacing: 8) {
+                                        AvatarView(
+                                            url: typingMember?.profile.avatarUrl,
+                                            name: typingMember?.profile.name ?? "?",
+                                            size: 28
+                                        )
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("placeholder")
+                                                .font(.caption)
+                                                .fontWeight(.medium)
+                                                .hidden()
+                                            TypingBubbleView()
+                                        }
+                                        Spacer()
                                     }
-                                    Spacer()
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 2)
+                                    .transition(.asymmetric(
+                                        insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                        removal: .opacity
+                                    ))
+                                    .id("typing")
                                 }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 2)
-                                .transition(.asymmetric(
-                                    insertion: .opacity.combined(with: .move(edge: .bottom)),
-                                    removal: .opacity
-                                ))
-                                .id("typing")
-                            }
 
-                            Color.clear.frame(height: 10).id("bottom")
-                        }
-                        .padding(.vertical, 8)
-                        .animation(.easeOut(duration: 0.2), value: vm.typingUserIds.isEmpty)
-                    }
-                    .scrollDismissesKeyboard(suppressInteractiveKeyboardDismiss ? .never : .interactively)
-                    .onTapGesture {
-                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    }
-                    .background(
-                        GeometryReader { g in
-                            Color.clear
-                                .onAppear { scrollViewFrame = g.frame(in: .global) }
-                                .onChange(of: g.frame(in: .global)) { _, new in scrollViewFrame = new }
-                        }
-                    )
-                    .onScrollGeometryChange(for: Bool.self) { geo in
-                        // "Near the bottom" == within one viewport of it, same
-                        // rule as before, just evaluated before it reaches @State
-                        // so a write only happens when the answer actually flips.
-                        let distance = geo.contentSize.height
-                            - (geo.contentOffset.y + geo.containerSize.height)
-                        return max(0, distance) <= max(1, geo.containerSize.height)
-                    } action: { _, nearBottom in
-                        isNearBottom = nearBottom
-                        if nearBottom {
-                            newMsgCount = 0
-                            // Back at the bottom: release history far above the
-                            // viewport, then re-pin so the removal can't shift it.
-                            if vm.trimHistoryIfNeeded() {
-                                proxy.scrollTo("bottom", anchor: .bottom)
+                                Color.clear.frame(height: 10).id("bottom")
                             }
+                            .padding(.vertical, 8)
+                            .animation(.easeOut(duration: 0.2), value: vm.typingUserIds.isEmpty)
                         }
-                    }
-                    .onScrollGeometryChange(for: CGFloat.self) { geo in
-                        geo.contentSize.height
-                    } action: { old, new in
-                        guard stickToBottom, initialLoadDone, new != old else { return }
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                    .onScrollPhaseChange { _, phase in
-                        if phase == .interacting { stickToBottom = false }
-                    }
-                    .overlay(alignment: .bottomTrailing) {
-                        if showScrollButton {
-                            ZStack(alignment: .topTrailing) {
-                                Button {
-                                    newMsgCount = 0
-                                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                                } label: {
-                                    Image(systemName: "chevron.down")
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(.white)
-                                        .frame(width: 36, height: 36)
-                                        .background(Color.yaplyAccent)
-                                        .clipShape(Circle())
-                                        .shadow(color: Color.yaplyAccent.opacity(0.35), radius: 6, y: 2)
-                                }
-                                if newMsgCount > 0 {
-                                    Text(newMsgCount > 99 ? "99+" : "\(newMsgCount)")
-                                        .font(.system(size: 10, weight: .bold))
-                                        .foregroundStyle(.white)
-                                        .padding(.horizontal, 4)
-                                        .frame(minWidth: 18, minHeight: 18)
-                                        .background(Color.yaplyDanger)
-                                        .clipShape(Capsule())
-                                        .offset(x: 6, y: -6)
+                        .scrollDismissesKeyboard(.interactively)
+                        .onTapGesture {
+                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                        }
+                        // The visible part only (minus any safe-area insets). Stored in the
+                        // reference box, not @State, so the keyboard animation doesn't re-evaluate
+                        // this body on every frame; the send flight reads it once.
+                        .onGeometryChange(for: CGRect.self) { g in
+                            let frame = g.frame(in: .global)
+                            return CGRect(
+                                x: frame.minX,
+                                y: frame.minY + g.safeAreaInsets.top,
+                                width: frame.width,
+                                height: max(0, frame.height - g.safeAreaInsets.top - g.safeAreaInsets.bottom)
+                            )
+                        } action: { visible in
+                            anchorStore.scrollViewFrame = visible
+                        }
+                        .onScrollGeometryChange(for: Bool.self) { geo in
+                            // "Near the bottom" == within one viewport of it, same
+                            // rule as before, just evaluated before it reaches @State
+                            // so a write only happens when the answer actually flips.
+                            let distance = geo.contentSize.height
+                                - (geo.contentOffset.y + geo.containerSize.height)
+                            return max(0, distance) <= max(1, geo.containerSize.height)
+                        } action: { _, nearBottom in
+                            isNearBottom = nearBottom
+                            if nearBottom {
+                                newMsgCount = 0
+                                // Back at the bottom: release history far above the
+                                // viewport, then re-pin so the removal can't shift it.
+                                if vm.trimHistoryIfNeeded() {
+                                    proxy.scrollTo("bottom", anchor: .bottom)
                                 }
                             }
-                            .padding(.trailing, 16)
-                            .padding(.bottom, 10)
-                            .transition(.scale.combined(with: .opacity))
                         }
-                    }
-                    .animation(.easeInOut(duration: 0.2), value: showScrollButton)
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 10)
-                            .onChanged { value in
-                                let dx = value.translation.width
-                                let dy = value.translation.height
-                                guard abs(dx) > abs(dy) else { return }
-                                swipe.offset = max(-65, min(0, dx))
-                            }
-                            .onEnded { _ in
-                                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                                    swipe.offset = 0
+                        .overlay(alignment: .bottomTrailing) {
+                            if showScrollButton {
+                                ZStack(alignment: .topTrailing) {
+                                    Button {
+                                        newMsgCount = 0
+                                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                                    } label: {
+                                        Image(systemName: "chevron.down")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundStyle(.white)
+                                            .frame(width: 36, height: 36)
+                                            .background(Color.yaplyAccent)
+                                            .clipShape(Circle())
+                                            .shadow(color: Color.yaplyAccent.opacity(0.35), radius: 6, y: 2)
+                                    }
+                                    if newMsgCount > 0 {
+                                        Text(newMsgCount > 99 ? "99+" : "\(newMsgCount)")
+                                            .font(.system(size: 10, weight: .bold))
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 4)
+                                            .frame(minWidth: 18, minHeight: 18)
+                                            .background(Color.yaplyDanger)
+                                            .clipShape(Capsule())
+                                            .offset(x: 6, y: -6)
+                                    }
                                 }
+                                .padding(.trailing, 16)
+                                .padding(.bottom, 10)
+                                .transition(.scale.combined(with: .opacity))
                             }
-                    )
-                    .onChange(of: vm.messages.count) { _, _ in
-                        handleMessageCountChange(proxy: proxy)
-                    }
-                    .onChange(of: vm.typingUserIds.isEmpty) { _, isEmpty in
-                        if !isEmpty && isNearBottom {
-                            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                         }
-                    }
-                    .onChange(of: scrollToId) { _, id in
-                        guard let id else { return }
-                        stickToBottom = false
-                        withAnimation { proxy.scrollTo(rowId(for: id), anchor: .center) }
-                        scrollToId = nil
-                        highlightedId = id
-                        Task {
-                            try? await Task.sleep(for: .seconds(1.5))
-                            highlightedId = nil
+                        .animation(.easeInOut(duration: 0.2), value: showScrollButton)
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 10)
+                                .onChanged { value in
+                                    let dx = value.translation.width
+                                    let dy = value.translation.height
+                                    guard abs(dx) > abs(dy) else { return }
+                                    swipe.offset = max(-65, min(0, dx))
+                                }
+                                .onEnded { _ in
+                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                                        swipe.offset = 0
+                                    }
+                                }
+                        )
+                        .onChange(of: vm.messages.count) { _, _ in
+                            handleMessageCountChange(proxy: proxy)
                         }
-                    }
-                    .opacity(hasScrolledInitially ? 1 : 0)
-                    .overlay {
-                        if !hasScrolledInitially {
-                            ProgressView()
-                        }
-                    }
-                    // The scroll view is rebuilt (`.id`) once the first page is merged, so
-                    // its first layout already holds the newest messages and starts at the
-                    // bottom. Chasing the bottom with scrollTo(id) on an initially empty
-                    // LazyVStack resolved against estimated row heights and landed short.
-                    // `.initialOffset` only: a plain anchor would also re-pin on keyboard
-                    // resizes and when older pages are prepended.
-                    .defaultScrollAnchor(.bottom, for: .initialOffset)
-                    .task {
-                        scrollProxy = proxy
-                        guard initialLoadDone else { return }
-                        // Safety net only; the anchor above does the positioning.
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                        try? await Task.sleep(nanoseconds: 50_000_000)
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                        hasScrolledInitially = true
-                    }
-                    .id(initialLoadDone)
-                }
-                .task {
-                    vm.currentUsername = currentUsername
-                    newMsgCount = 0
-                    await vm.onAppear()
-                    initialLoadDone = true
-                }
-
-                // Command feedback banner
-                if let feedback = commandFeedback {
-                    HStack(spacing: 8) {
-                        Image(systemName: "terminal")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.yaplySecondary)
-                        Text(feedback)
-                            .font(.system(size: 13))
-                            .foregroundStyle(Color.yaplySecondary)
-                        Spacer()
-                        Button { commandFeedback = nil } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 11))
-                                .foregroundStyle(Color.yaplySecondary.opacity(0.6))
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.yaplyTint)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yaplyBorder.opacity(0.8)))
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 4)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-
-                if vm.myRequestState == "pending" {
-                    MessageRequestBarView(
-                        conversationId: conversationId,
-                        currentUserId: currentUserId,
-                        otherUserId: currentOtherMember?.userId,
-                        onAccepted: { vm.setMyRequestState("accepted") },
-                        onDeclinedOrBlocked: { router.pop() }
-                    )
-                } else if recordingVoice {
-                    VoiceRecorderBar(
-                        onCancel: { recordingVoice = false },
-                        onSend: { url, _ in
-                            recordingVoice = false
-                            Task { await vm.sendVoiceMessage(fileURL: url) }
-                        }
-                    )
-                } else {
-                    MessageInputView(
-                        text: $messageText,
-                        replyTo: vm.replyToMessage,
-                        replyIsOwn: replyTargetIsOwn,
-                        onSend: { linkPreview, latePreview in
-                            let rawText = messageText.trimmingCharacters(in: .whitespaces)
-                            guard !rawText.isBlank else { return }
-                            messageText = ""
-                            vm.notifyStopTyping()
-                            if let cmd = ParsedCommand.parse(rawText) {
-                                latePreview?.cancel()
-                                Task { await handleCommand(cmd) }
-                            } else if let pending = vm.beginTextSend(text: rawText, linkPreview: linkPreview) {
-                                startSendFlight(for: pending)
-                                Task { await vm.completeTextSend(pending, latePreview: latePreview) }
+                        .onChange(of: vm.typingUserIds.isEmpty) { _, isEmpty in
+                            if !isEmpty && isNearBottom {
+                                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                             }
-                        },
-                        onCancelReply: { vm.replyToMessage = nil },
-                        disabled: vm.isSending,
-                        onPickFile: { showFileImporter = true },
-                        onPickCamera: {
-                            if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                                showCamera = true
-                            } else {
-                                showPhotoPicker = true
-                            }
-                        },
-                        onPickImage: { showPhotoPicker = true },
-                        onStartVoice: { recordingVoice = true },
-                        onEmoji: { showExpression = true },
-                        onTyping: { vm.notifyTyping() },
-                        onStopTyping: { vm.notifyStopTyping() },
-                        onPasteImage: { image in
+                        }
+                        .onChange(of: scrollToId) { _, id in
+                            guard let id else { return }
+                            withAnimation { proxy.scrollTo(rowId(for: id), anchor: .center) }
+                            scrollToId = nil
+                            highlightedId = id
                             Task {
-                                if image.hasAlpha {
-                                    await vm.sendStickerMessage(image: image)
+                                try? await Task.sleep(for: .seconds(1.5))
+                                highlightedId = nil
+                            }
+                        }
+                        .opacity(hasScrolledInitially ? 1 : 0)
+                        .overlay {
+                            if !hasScrolledInitially {
+                                ProgressView()
+                            }
+                        }
+                        // The scroll view is rebuilt (`.id`) once the first page is merged, so
+                        // its first layout already holds the newest messages and starts at the
+                        // bottom. Chasing the bottom with scrollTo(id) on an initially empty
+                        // LazyVStack resolved against estimated row heights and landed short.
+                        // All roles, not just the initial offset: the anchor also keeps the
+                        // bottom pinned when the content height is re-estimated (LazyVStack
+                        // rows realizing) and when the keyboard resizes the viewport, natively
+                        // and in step with the keyboard. scrollTo(id) in a LazyVStack resolves
+                        // against estimates and was the source of the jumps.
+                        .defaultScrollAnchor(.bottom)
+                        .task {
+                            scrollProxy = proxy
+                            guard initialLoadDone else { return }
+                            // Safety net only; the anchor above does the positioning.
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                            try? await Task.sleep(nanoseconds: 50_000_000)
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                            hasScrolledInitially = true
+                        }
+                        .id(initialLoadDone)
+                    }
+                    .task {
+                        vm.currentUsername = currentUsername
+                        newMsgCount = 0
+                        await vm.onAppear()
+                        initialLoadDone = true
+                    }
+
+                    // Command feedback banner
+                    if let feedback = commandFeedback {
+                        HStack(spacing: 8) {
+                            Image(systemName: "terminal")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.yaplySecondary)
+                            Text(feedback)
+                                .font(.system(size: 13))
+                                .foregroundStyle(Color.yaplySecondary)
+                            Spacer()
+                            Button { commandFeedback = nil } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Color.yaplySecondary.opacity(0.6))
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.yaplyTint)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yaplyBorder.opacity(0.8)))
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 4)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+
+                    if vm.myRequestState == "pending" {
+                        MessageRequestBarView(
+                            conversationId: conversationId,
+                            currentUserId: currentUserId,
+                            otherUserId: currentOtherMember?.userId,
+                            onAccepted: { vm.setMyRequestState("accepted") },
+                            onDeclinedOrBlocked: { router.pop() }
+                        )
+                    } else if recordingVoice {
+                        VoiceRecorderBar(
+                            onCancel: { recordingVoice = false },
+                            onSend: { url, _ in
+                                recordingVoice = false
+                                Task { await vm.sendVoiceMessage(fileURL: url) }
+                            }
+                        )
+                    } else {
+                        MessageInputView(
+                            text: $messageText,
+                            replyTo: vm.replyToMessage,
+                            replyIsOwn: replyTargetIsOwn,
+                            onSend: { linkPreview, latePreview in
+                                let rawText = messageText.trimmingCharacters(in: .whitespaces)
+                                guard !rawText.isBlank else { return }
+                                messageText = ""
+                                vm.notifyStopTyping()
+                                if let cmd = ParsedCommand.parse(rawText) {
+                                    latePreview?.cancel()
+                                    Task { await handleCommand(cmd) }
+                                } else if let pending = vm.beginTextSend(text: rawText, linkPreview: linkPreview) {
+                                    startSendFlight(for: pending)
+                                    Task { await vm.completeTextSend(pending, latePreview: latePreview) }
+                                }
+                            },
+                            onCancelReply: { vm.replyToMessage = nil },
+                            disabled: vm.isSending,
+                            onPickFile: { showFileImporter = true },
+                            onPickCamera: {
+                                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                                    showCamera = true
                                 } else {
-                                    if let photo = await MediaEncoding.photoJPEG(image) {
-                                        await vm.sendImageMessage(imageData: photo.data, mimeType: "image/jpeg", pixelSize: photo.size)
+                                    showPhotoPicker = true
+                                }
+                            },
+                            onPickImage: { showPhotoPicker = true },
+                            onStartVoice: { recordingVoice = true },
+                            onEmoji: { showExpression = true },
+                            onTyping: { vm.notifyTyping() },
+                            onStopTyping: { vm.notifyStopTyping() },
+                            onPasteImage: { image in
+                                Task {
+                                    if image.hasAlpha {
+                                        await vm.sendStickerMessage(image: image)
+                                    } else {
+                                        if let photo = await MediaEncoding.photoJPEG(image) {
+                                            await vm.sendImageMessage(imageData: photo.data, mimeType: "image/jpeg", pixelSize: photo.size)
+                                        }
                                     }
                                 }
-                            }
-                        },
-                        onFocusChange: { focused in
-                            guard let scrollProxy else { return }
-                            if focused {
-                                // Keep whatever the user is currently reading in view as the
-                                // keyboard opens, instead of only doing this near the bottom —
-                                // find the lowest bubble still fully on-screen right now and
-                                // pin it above the keyboard, wherever in the history that is.
-                                // Captured synchronously (pre-keyboard geometry); the actual
-                                // scroll is deferred a tick below.
-                                // Only a bubble we still have live geometry for; with none,
-                                // leave the viewport alone rather than jump somewhere.
-                                let lastVisibleId = anchorStore.frames
-                                    .filter {
-                                        vm.layout.messagesById[$0.key] != nil
-                                            && $0.value.maxY <= scrollViewFrame.maxY + 1
-                                            && $0.value.maxY >= scrollViewFrame.minY
-                                    }
-                                    .max(by: { $0.value.maxY < $1.value.maxY })?.key
-                                if let lastVisibleId {
-                                    performKeyboardScroll(scrollProxy) {
-                                        scrollProxy.scrollTo(rowId(for: lastVisibleId), anchor: .bottom)
-                                    }
-                                }
-                            } else if isNearBottom {
-                                // Mirror the push-up: once the keyboard is gone and the list
-                                // regains that space, settle back to the true bottom instead
-                                // of leaving a gap where the last visible bubble was pinned.
-                                performKeyboardScroll(scrollProxy) {
-                                    scrollProxy.scrollTo("bottom", anchor: .bottom)
-                                }
-                            }
-                        },
-                        members: vm.conversationMembers,
-                        isGroup: vm.isGroupConversation,
-                        onFieldFrame: { anchorStore.composerFieldFrame = $0 },
-                        onFieldChromeFrame: { anchorStore.composerChromeFrame = $0 }
-                    )
+                            },
+                            // No onFocusChange scroll: `KeyboardLift` slides the list and
+                            // composer up as one piece. A scrollTo(id) on focus made the
+                            // LazyVStack re-estimate and land hundreds of points away on device.
+                            members: vm.conversationMembers,
+                            isGroup: vm.isGroupConversation,
+                            onFieldFrame: { anchorStore.composerFieldFrame = $0 },
+                            onFieldChromeFrame: { anchorStore.composerChromeFrame = $0 }
+                        )
+                    }
                 }
+                .modifier(KeyboardLift(store: keyboardLift))
         }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .background { KeyboardHeightProbe(store: keyboardLift) }
         .background(Color.yaplyBackground.ignoresSafeArea())
         .onDrop(of: [.image], isTargeted: $isDropTargeted) { providers in
             handleDroppedProviders(providers)
@@ -788,25 +758,6 @@ struct ChatView: View {
         openPanel(item.kind.tab)
     }
 
-    /// Shared by the focus-gained and focus-lost keyboard scroll adjustments.
-    /// Scrolling in the same transaction as the @FocusState change can make
-    /// SwiftUI drop the pending responder assignment, so it's deferred a tick.
-    /// Interactive-dismiss is also suppressed for the duration: it treats any
-    /// offset change on this ScrollView -- not just a user drag -- as a cue to
-    /// dismiss the keyboard, which would resign focus right back off.
-    private func performKeyboardScroll(_ proxy: ScrollViewProxy, _ scroll: @escaping () -> Void) {
-        suppressInteractiveKeyboardDismiss = true
-        DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.25)) {
-                scroll()
-            }
-            Task {
-                try? await Task.sleep(nanoseconds: 400_000_000)
-                suppressInteractiveKeyboardDismiss = false
-            }
-        }
-    }
-
     private func handleMessageCountChange(proxy: ScrollViewProxy) {
         // The initial `.task` owns first positioning; don't race it with an animated scroll.
         guard hasScrolledInitially, let last = vm.messages.last else { return }
@@ -861,7 +812,8 @@ struct ChatView: View {
                 let current = vm.messages.last(where: { $0.rowId == rowId })
                 let rect = anchorStore.frames[rowId] ?? current.flatMap { anchorStore.frames[$0.id] }
                 if let rect, rect.height > 0,
-                   rect.minY >= scrollViewFrame.minY - 1, rect.maxY <= scrollViewFrame.maxY + 1 {
+                   rect.minY >= anchorStore.scrollViewFrame.minY - 1,
+                   rect.maxY <= anchorStore.scrollViewFrame.maxY + 1 {
                     target = rect
                     break
                 }
@@ -1188,6 +1140,65 @@ final class BubbleAnchorStore {
     var composerFieldFrame: CGRect = .zero
     /// The rounded chrome around it — the box the flight morphs into the bubble.
     var composerChromeFrame: CGRect = .zero
+    /// The message list's visible global frame, excluding the composer/keyboard inset.
+    var scrollViewFrame: CGRect = .zero
+}
+
+// MARK: - Keyboard lift
+
+/// The keyboard's current overlap with the chat, above the home-indicator area.
+/// Its own observable so a keyboard frame only re-renders `KeyboardLift`, not `ChatView`.
+@Observable
+final class KeyboardLiftStore {
+    var lift: CGFloat = 0
+}
+
+/// Measures the keyboard: placed outside the view that ignores it, so its bottom
+/// safe-area inset is how far the keyboard reaches up the screen.
+private struct KeyboardHeightProbe: View {
+    let store: KeyboardLiftStore
+
+    private static var homeIndicatorInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+            .first?.safeAreaInsets.bottom ?? 0
+    }
+
+    var body: some View {
+        Color.clear
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { total in
+                // The home-indicator area is part of the inset but the keyboard
+                // covers it too, so it isn't part of the lift. Read from the window:
+                // measuring it here caught a 0 before the first layout.
+                let resting = Self.homeIndicatorInset
+                // Plus a 3pt breathing gap above the keyboard while it's up.
+                let overlap = total - resting
+                let height = overlap > 0.5 ? overlap + 3 : 0
+                let delta = abs(height - store.lift)
+                guard delta > 0.5 else { return }
+                // A show or hide is one step: ride the keyboard's own curve. An
+                // interactive drag arrives frame by frame: follow the finger.
+                if delta > 40 {
+                    withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500)) {
+                        store.lift = height
+                    }
+                } else {
+                    store.lift = height
+                }
+            }
+    }
+}
+
+/// Slides the list and composer up by the keyboard's height without touching
+/// their layout, clipping whatever passes above the list's top edge.
+private struct KeyboardLift: ViewModifier {
+    let store: KeyboardLiftStore
+
+    func body(content: Content) -> some View {
+        content
+            .offset(y: -store.lift)
+            .clipped()
+    }
 }
 
 // MARK: - Pinned message banner
