@@ -60,6 +60,11 @@ struct ChatView: View {
     // would appear then get yanked back down instantly. Disabled for the
     // duration of that one programmatic scroll.
     @State private var suppressInteractiveKeyboardDismiss = false
+    /// The text send currently flying from the composer into its bubble. A
+    /// reference store, not a SendFlight @State: only the overlay and the
+    /// hidden row observe it, so a flight never re-evaluates this body.
+    @State private var flightStore = SendFlightStore()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AppRouter.self) private var router
 
     private let convRepository = ConversationRepository()
@@ -98,6 +103,10 @@ struct ChatView: View {
             isGroupConversation: vm.isGroupConversation,
             currentUserId: currentUserId
         )
+    }
+
+    private var replyTargetIsOwn: Bool {
+        vm.replyToMessage?.senderId == currentUserId
     }
 
     var body: some View {
@@ -148,7 +157,9 @@ struct ChatView: View {
                             let layout = layout
                             ForEach(layout.groups) { group in
                                 DateSeparatorView(date: group.date)
-                                ForEach(group.messages) { msg in
+                                // Keyed by rowId so an own send keeps its identity when the
+                                // server confirms it (temp id → real id). See SendFlight.
+                                ForEach(group.messages, id: \.rowId) { msg in
                                     messageRow(
                                         msg,
                                         layout: layout,
@@ -284,7 +295,7 @@ struct ChatView: View {
                     }
                     .onChange(of: scrollToId) { _, id in
                         guard let id else { return }
-                        withAnimation { proxy.scrollTo(id, anchor: .center) }
+                        withAnimation { proxy.scrollTo(rowId(for: id), anchor: .center) }
                         scrollToId = nil
                         highlightedId = id
                         Task {
@@ -359,6 +370,7 @@ struct ChatView: View {
                     MessageInputView(
                         text: $messageText,
                         replyTo: vm.replyToMessage,
+                        replyIsOwn: replyTargetIsOwn,
                         onSend: { linkPreview, latePreview in
                             let rawText = messageText.trimmingCharacters(in: .whitespaces)
                             guard !rawText.isBlank else { return }
@@ -367,8 +379,9 @@ struct ChatView: View {
                             if let cmd = ParsedCommand.parse(rawText) {
                                 latePreview?.cancel()
                                 Task { await handleCommand(cmd) }
-                            } else {
-                                Task { await vm.sendMessage(text: rawText, linkPreview: linkPreview, latePreview: latePreview) }
+                            } else if let pending = vm.beginTextSend(text: rawText, linkPreview: linkPreview) {
+                                startSendFlight(for: pending)
+                                Task { await vm.completeTextSend(pending, latePreview: latePreview) }
                             }
                         },
                         onCancelReply: { vm.replyToMessage = nil },
@@ -411,7 +424,7 @@ struct ChatView: View {
                                     .max(by: { $0.value.maxY < $1.value.maxY })?.key
                                 performKeyboardScroll(scrollProxy) {
                                     if let lastVisibleId {
-                                        scrollProxy.scrollTo(lastVisibleId, anchor: .bottom)
+                                        scrollProxy.scrollTo(rowId(for: lastVisibleId), anchor: .bottom)
                                     } else {
                                         scrollProxy.scrollTo("bottom", anchor: .bottom)
                                     }
@@ -426,7 +439,9 @@ struct ChatView: View {
                             }
                         },
                         members: vm.conversationMembers,
-                        isGroup: vm.isGroupConversation
+                        isGroup: vm.isGroupConversation,
+                        onFieldFrame: { anchorStore.composerFieldFrame = $0 },
+                        onFieldChromeFrame: { anchorStore.composerChromeFrame = $0 }
                     )
                 }
         }
@@ -451,6 +466,13 @@ struct ChatView: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
+        .overlay {
+            SendFlightLayer(
+                store: flightStore,
+                mentionMembers: vm.isGroupConversation ? vm.conversationMembers : [],
+                currentUserId: currentUserId
+            )
+        }
         .overlay {
             if let m = actionsMessage {
                 MessageActionsOverlay(
@@ -751,12 +773,86 @@ struct ChatView: View {
 
     private func handleMessageCountChange(proxy: ScrollViewProxy) {
         guard let last = vm.messages.last else { return }
+        if let flight = flightStore.flight, flight.rowId == last.rowId {
+            // The flight measures the bubble's final on-screen frame, so the
+            // list has to be at rest there — no animated scroll underneath it.
+            proxy.scrollTo("bottom", anchor: .bottom)
+            return
+        }
         if last.senderId == currentUserId || isNearBottom {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.65)) {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         } else {
             newMsgCount += 1
+        }
+    }
+
+    /// `ScrollViewReader` ids are row ids; own sends keep their temp id as
+    /// their row id after confirm, so a message id has to be translated.
+    private func rowId(for messageId: UUID) -> UUID {
+        vm.layout.messagesById[messageId]?.rowId ?? messageId
+    }
+
+    /// Starts the composer → bubble flight for a just-appended text send.
+    /// Skipped (the bubble just appears) under Reduce Motion, for link-preview
+    /// sends (the card changes the bubble's size mid-flight), or when the
+    /// bubble doesn't land fully on screen in time.
+    private func startSendFlight(for pending: ChatViewModel.PendingTextSend) {
+        let field = anchorStore.composerFieldFrame
+        guard !reduceMotion, pending.linkPreview == nil, field != .zero,
+              let message = vm.messages.last(where: { $0.id == pending.tempId })
+        else { return }
+        let rowId = pending.tempId
+        let chrome = anchorStore.composerChromeFrame == .zero
+            ? field.insetBy(dx: -12, dy: -8)
+            : anchorStore.composerChromeFrame
+        flightStore.flight = SendFlight(
+            rowId: rowId, message: message, fieldFrame: field, chromeFrame: chrome,
+            chromeRadius: MessageInputView.fieldChromeRadius(height: chrome.height)
+        )
+
+        Task { @MainActor in
+            // The row lays out and the list re-pins to the bottom over the next
+            // frame or two. Poll briefly for the bubble's settled frame (keyed
+            // by message id, which may already be the real id if the send
+            // confirmed this fast).
+            var target: CGRect?
+            for _ in 0..<10 {
+                try? await Task.sleep(for: .milliseconds(16))
+                guard flightStore.flight?.rowId == rowId else { return }
+                let current = vm.messages.last(where: { $0.rowId == rowId })
+                let rect = anchorStore.frames[rowId] ?? current.flatMap { anchorStore.frames[$0.id] }
+                if let rect, rect.height > 0,
+                   rect.minY >= scrollViewFrame.minY - 1, rect.maxY <= scrollViewFrame.maxY + 1 {
+                    target = rect
+                    break
+                }
+            }
+            guard let target else {
+                flightStore.flight = nil
+                return
+            }
+            flightStore.flight?.target = target
+            flightStore.flight?.position = vm.messages.last(where: { $0.rowId == rowId })
+                .flatMap { vm.layout.positions[$0.id] } ?? .single
+            // One frame at the start position before animating, or SwiftUI
+            // would insert the bubble layer already at its destination.
+            try? await Task.sleep(for: .milliseconds(16))
+            guard flightStore.flight?.rowId == rowId else { return }
+            // Three transactions so X, Y and the colour crossfade each run on
+            // their own curve (see SendFlight). Both axes last the same 0.3s.
+            withAnimation(SendFlight.fade) {
+                flightStore.flight?.filled = true
+            }
+            withAnimation(SendFlight.curveX) {
+                flightStore.flight?.landedX = true
+            }
+            withAnimation(SendFlight.curveY) {
+                flightStore.flight?.landedY = true
+            } completion: {
+                if flightStore.flight?.rowId == rowId { flightStore.flight = nil }
+            }
         }
     }
 
@@ -809,6 +905,7 @@ struct ChatView: View {
         // every visible bubble to rebuild its body.
         .equatable()
         .opacity(actionsMessage?.id == msg.id ? 0 : 1)
+        .modifier(SendFlightHidden(store: flightStore, rowId: msg.rowId))
 
             if let readers = layout.seenHeads[msg.id] {
                 SeenHeadsView(profiles: readers.compactMap { id in
@@ -816,7 +913,7 @@ struct ChatView: View {
                 })
             }
         }
-        .id(msg.id)
+        .id(msg.rowId)
         // The highlight is a rounded background, not a clip: clipping every row
         // just for this cost an offscreen mask pass per row, image rows included.
         .background(
@@ -927,6 +1024,7 @@ struct ChatView: View {
 // bubble rather than a one-off shape.
 private struct TypingBubbleView: View {
     @State private var animating = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 5) {
@@ -957,7 +1055,8 @@ private struct TypingBubbleView: View {
             ))
             .stroke(Color.yaplyBorderSoft, lineWidth: 1)
         )
-        .onAppear { animating = true }
+        // Reduce Motion: static dots instead of the endless bounce.
+        .onAppear { if !reduceMotion { animating = true } }
     }
 }
 
@@ -1048,6 +1147,10 @@ private struct SeenHeadsView: View {
 /// reference type with no observation is the right storage.
 final class BubbleAnchorStore {
     var frames: [UUID: CGRect] = [:]
+    /// The composer TextField's global frame (for the send flight).
+    var composerFieldFrame: CGRect = .zero
+    /// The rounded chrome around it — the box the flight morphs into the bubble.
+    var composerChromeFrame: CGRect = .zero
 }
 
 // MARK: - Pinned message banner

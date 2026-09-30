@@ -116,9 +116,16 @@ struct DecryptedMessage: Identifiable, Hashable {
     // only). Decoded out of `content` by LinkPreviewCodec at every decrypt
     // site — see ../CLAUDE.md's "Link previews" section.
     var linkPreview: LinkPreview?
+    // The optimistic temp id this message was sent under, kept after the
+    // server confirms it. Rows are keyed by `rowId`, so the temp → real swap
+    // keeps the same SwiftUI identity instead of removing and re-inserting
+    // the row (which would cut the send flight short and replay transitions).
+    var localId: UUID? = nil
 
     var isDeleted: Bool { deletedAt != nil }
     var isText: Bool { type == "text" }
+    /// Stable list identity: the temp id for this device's own sends, else `id`.
+    var rowId: UUID { localId ?? id }
     var isMedia: Bool { ["image", "gif", "sticker"].contains(type) }
 
     /// Short, human label for list/banner previews. Media types carry no text

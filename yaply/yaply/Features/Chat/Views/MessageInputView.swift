@@ -6,6 +6,8 @@ import Supabase
 struct MessageInputView: View {
     @Binding var text: String
     let replyTo: DecryptedMessage?
+    /// Whether `replyTo` is the current user's own message ("Replying to yourself").
+    var replyIsOwn: Bool = false
     // The resolved (and not dismissed) link preview at the moment of send, if
     // any — sealed alongside the text by the caller. See ../CLAUDE.md's "Link
     // previews" section.
@@ -36,6 +38,13 @@ struct MessageInputView: View {
     /// thread hosts that don't pass them get plain composer behavior.
     var members: [MemberSummary] = []
     var isGroup: Bool = false
+    /// Reports the text field's global frame, so ChatView's send flight knows
+    /// where the text sat before the field cleared. Written into a reference
+    /// box by the caller, never @State — it changes as the field grows.
+    var onFieldFrame: ((CGRect) -> Void)? = nil
+    /// Same, for the rounded chrome around the field — the box the send
+    /// flight morphs into the bubble.
+    var onFieldChromeFrame: ((CGRect) -> Void)? = nil
 
     @State private var showCommandPalette = false
     @State private var canPasteImage = false
@@ -153,6 +162,16 @@ struct MessageInputView: View {
 
     /// Text-field container shape: a true capsule for iMessage, a rounded
     /// rect (Messenger's is a touch tighter than yaply's default) otherwise.
+    /// Corner radius of the field chrome at a given height, matching
+    /// `textFieldShape` (the iMessage capsule is height / 2).
+    static func fieldChromeRadius(height: CGFloat) -> CGFloat {
+        switch ChatStyle.current {
+        case .imessage: return height / 2
+        case .messenger: return 20
+        case .yaply: return 22
+        }
+    }
+
     private var textFieldShape: AnyShape {
         switch ChatStyle.current {
         case .imessage: return AnyShape(Capsule())
@@ -171,9 +190,13 @@ struct MessageInputView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let reply = replyTo {
-                ReplyStripView(message: reply, onDismiss: onCancelReply)
+            Group {
+                if let reply = replyTo {
+                    ReplyStripView(message: reply, isOwn: replyIsOwn, onDismiss: onCancelReply)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .animation(.spring(response: 0.32, dampingFraction: 0.85), value: replyTo?.id)
 
             if previewLoading || activePreview != nil {
                 LinkPreviewChipView(
@@ -280,6 +303,11 @@ struct MessageInputView: View {
                     TextField("Message...", text: $text, axis: .vertical)
                         .lineLimit(1...6)
                         .font(.system(size: 15))
+                        .onGeometryChange(for: CGRect.self) { proxy in
+                            proxy.frame(in: .global)
+                        } action: { rect in
+                            onFieldFrame?(rect)
+                        }
                         .focused($isFocused)
                         .disabled(disabled)
                         .onSubmit {
@@ -319,6 +347,11 @@ struct MessageInputView: View {
                 .padding(.vertical, 8)
                 .background(Color.yaplySurface)
                 .clipShape(textFieldShape)
+                .onGeometryChange(for: CGRect.self) { proxy in
+                    proxy.frame(in: .global)
+                } action: { rect in
+                    onFieldChromeFrame?(rect)
+                }
                 .overlay(
                     textFieldShape
                         .stroke(isFocused ? Color.yaplyAccent.opacity(0.5) : Color.yaplyBorder,

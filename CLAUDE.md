@@ -507,6 +507,44 @@ Semantics (friend requests vs message requests, `request_state`, blocks) are in
 
 ---
 
+## Send animation (composer → bubble)
+
+Contract and web counterpart in `../CLAUDE.md` → Feature Map → *Send animation*.
+Files: `Features/Chat/Views/SendFlightOverlay.swift`, `ChatView.startSendFlight`,
+`ChatViewModel.beginTextSend` / `completeTextSend`.
+
+- **Motion** (constants in `SendFlight`, reference in `../CLAUDE.md`): the field's
+  chrome (`onFieldChromeFrame`, `MessageInputView.fieldChromeRadius`) morphs into
+  the bubble. X and Y are separate state flips in separate `withAnimation`
+  transactions, driving separate `.offset(x:)` / `.offset(y:)`, so each rides its
+  own timing curve. Merge them into one value and the path goes straight again.
+- **Rows are keyed by `DecryptedMessage.rowId`** (`localId ?? id`), in both the
+  `ForEach` and `.id(...)`. `confirmOptimistic` stamps `localId = tempId` onto the
+  confirmed message and drops any realtime duplicate of it, so a confirm never
+  remounts the row. `merge` and the update/delete rewrites carry `localId` forward;
+  a new `messages[idx] = DecryptedMessage(...)` must too. `ScrollViewReader`
+  targets are row ids, so translate message ids with `ChatView.rowId(for:)`.
+- **The optimistic append is synchronous** (`beginTextSend`), in the same tick the
+  field clears, so the flight can find the bubble's frame via `BubbleAnchorStore`
+  (keyed by message id). The composer reports its TextField frame into
+  `anchorStore.composerFieldFrame` through `onFieldFrame`.
+- **Flight state lives in `SendFlightStore`** (an `@Observable` reference), read
+  only by `SendFlightLayer` and each row's `SendFlightHidden` — never as `@State` on
+  `ChatView`, where every flight step re-evaluated the whole list and stuttered.
+- **The seal runs off the main actor** (`EnvelopeEncryption.seal`, detached). The
+  per-device ECDH wraps used to run on the main thread right as the flight animated.
+- While a flight is pending, `handleMessageCountChange` re-pins to the bottom
+  **without** animation; an animated scroll would move the target mid-measure.
+- Skipped under Reduce Motion, for link-preview sends, or if the bubble isn't fully
+  on screen within ~160ms. Live incoming appends are wrapped in `withAnimation`
+  so the row's insertion transition actually plays.
+- Own realtime inserts are **not** filtered out: the `sender_id` check compares
+  against an uppercase `uuidString`, so it never matches, and that's what lets
+  sends from this user's other devices arrive live. Fixing the case without
+  scoping it to this device would break that.
+
+---
+
 ## Message long-press actions (Messenger / Instagram style)
 
 Long-pressing a bubble (`MessageBubbleView.onLongPress`, 0.3s + haptic) opens

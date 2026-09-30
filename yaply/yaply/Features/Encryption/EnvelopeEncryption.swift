@@ -29,6 +29,48 @@ enum EnvelopeEncryption {
         let cutoff = Date().addingTimeInterval(-90 * 24 * 60 * 60)
         let devices = byUser.values.joined().filter { ($0.lastActiveAt ?? .distantPast) > cutoff }
 
+        let recipients: [SealRecipient] = devices.compactMap { device in
+            guard let coords = device.identityKey, let fp = device.keyFingerprint else { return nil }
+            return SealRecipient(userId: device.userId, fp: fp, x: coords.x, y: coords.y)
+        }
+        // The seal and the per-device ECDH wraps are pure CPU. Off the main
+        // actor so they can't stall the UI — a send starts right as the
+        // composer → bubble flight animates, which is drawn on the main thread.
+        guard let sealed = await Task.detached(priority: .userInitiated, operation: {
+            seal(plaintext: plaintext, recipients: recipients)
+        }).value else { return nil }
+
+        let envelopes = sealed.wrapped.map {
+            EnvelopePayload(
+                recipientUserId: $0.userId, recipientFp: $0.fp,
+                ephPub: $0.ephPub, keyIv: $0.keyIv, wrappedKey: $0.wrappedKey
+            )
+        }
+        guard !envelopes.isEmpty else { return nil }
+        return (sealed.content, sealed.iv, envelopes)
+    }
+
+    nonisolated struct SealRecipient: Sendable {
+        let userId: UUID
+        let fp: String
+        let x: String
+        let y: String
+    }
+
+    nonisolated struct SealedEnvelope: Sendable {
+        let userId: UUID
+        let fp: String
+        let ephPub: String
+        let keyIv: String
+        let wrappedKey: String
+    }
+
+    /// The pure crypto half of `encryptForMembers`: seals `plaintext` once under
+    /// a fresh message key and wraps that key for each recipient device.
+    nonisolated private static func seal(
+        plaintext: String,
+        recipients: [SealRecipient]
+    ) -> (content: String, iv: String, wrapped: [SealedEnvelope])? {
         let mk = EncryptionService.generateMessageKey()
         guard let sealed = try? EncryptionService.encryptMessage(plaintext, key: mk) else { return nil }
 
@@ -36,24 +78,21 @@ enum EnvelopeEncryption {
         // recipient device's envelope, per the documented wire-format contract.
         let ephemeral = P256.KeyAgreement.PrivateKey()
 
-        var envelopes: [EnvelopePayload] = []
-        for device in devices {
+        var wrapped: [SealedEnvelope] = []
+        for recipient in recipients {
             guard
-                let coords = device.identityKey,
-                let fp = device.keyFingerprint,
-                let pubKey = try? EncryptionService.publicKeyFromJWK(["x": coords.x, "y": coords.y]),
-                let wrapped = try? EncryptionService.wrapKey(mk, for: pubKey, using: ephemeral)
+                let pubKey = try? EncryptionService.publicKeyFromJWK(["x": recipient.x, "y": recipient.y]),
+                let w = try? EncryptionService.wrapKey(mk, for: pubKey, using: ephemeral)
             else { continue }
-            envelopes.append(EnvelopePayload(
-                recipientUserId: device.userId,
-                recipientFp: fp,
-                ephPub: EncryptionService.jwkToJSONString(wrapped.ephPubJWK),
-                keyIv: wrapped.keyIv,
-                wrappedKey: wrapped.wrappedKey
+            wrapped.append(SealedEnvelope(
+                userId: recipient.userId,
+                fp: recipient.fp,
+                ephPub: EncryptionService.jwkToJSONString(w.ephPubJWK),
+                keyIv: w.keyIv,
+                wrappedKey: w.wrappedKey
             ))
         }
-        guard !envelopes.isEmpty else { return nil }
-        return (sealed.content, sealed.iv, envelopes)
+        return (sealed.content, sealed.iv, wrapped)
     }
 
     // Decrypts an enc_v=2 message for this install: fetches an envelope sealed to

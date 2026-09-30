@@ -288,6 +288,26 @@ final class ChatViewModel {
         pendingIds.remove(id)
     }
 
+    /// Swaps an optimistic row for its confirmed message in place, keeping the
+    /// row's identity (`rowId` = the temp id). Realtime can land the real row
+    /// first — own inserts aren't filtered out, so sends from this user's
+    /// other devices still arrive live — and that duplicate is dropped in
+    /// favour of the temp row so the bubble on screen never remounts.
+    private func confirmOptimistic(tempId: UUID, with confirmed: DecryptedMessage, appendIfMissing: Bool = false) {
+        var confirmed = confirmed
+        confirmed.localId = tempId
+        guard let tempIdx = messages.firstIndex(where: { $0.id == tempId }) else {
+            if appendIfMissing, !messages.contains(where: { $0.id == confirmed.id }) { messages.append(confirmed) }
+            return
+        }
+        var next = messages
+        next[tempIdx] = confirmed
+        if let dup = next.indices.first(where: { $0 != tempIdx && next[$0].id == confirmed.id }) {
+            next.remove(at: dup)
+        }
+        messages = next
+    }
+
     // MARK: - Group info
 
     func loadConversationInfo() async {
@@ -377,8 +397,24 @@ final class ChatViewModel {
 
     // MARK: - Send text
 
+    /// An optimistic text send that's on screen but not yet sealed and sent.
+    struct PendingTextSend {
+        let tempId: UUID
+        let text: String
+        let linkPreview: LinkPreview?
+        let replyTo: DecryptedMessage?
+    }
+
     func sendMessage(text: String, linkPreview: LinkPreview? = nil, latePreview: Task<LinkPreview?, Never>? = nil) async {
-        guard !text.isBlank else { return }
+        guard let pending = beginTextSend(text: text, linkPreview: linkPreview) else { return }
+        await completeTextSend(pending, latePreview: latePreview)
+    }
+
+    /// Synchronous half of a text send: appends the optimistic row in the same
+    /// tick the composer clears, so ChatView's send flight can find the new
+    /// bubble by its temp id on the very next layout pass.
+    func beginTextSend(text: String, linkPreview: LinkPreview? = nil) -> PendingTextSend? {
+        guard !text.isBlank else { return nil }
 
         // Optimistic: show message immediately before network round-trip.
         // content stays the plain display text (never the encoded envelope);
@@ -392,8 +428,16 @@ final class ChatViewModel {
             createdAt: Date(), linkPreview: linkPreview
         ))
         beginPending(tempId)
-        defer { endPending(tempId) }
         replyToMessage = nil
+        return PendingTextSend(tempId: tempId, text: text, linkPreview: linkPreview, replyTo: capturedReplyTo)
+    }
+
+    func completeTextSend(_ pending: PendingTextSend, latePreview: Task<LinkPreview?, Never>? = nil) async {
+        let tempId = pending.tempId
+        let text = pending.text
+        let linkPreview = pending.linkPreview
+        let capturedReplyTo = pending.replyTo
+        defer { endPending(tempId) }
 
         // Extracted from plaintext before encryption — mention targeting is the
         // one piece of this send that travels unencrypted, since the server
@@ -458,16 +502,12 @@ final class ChatViewModel {
             }
 
             // Realtime may have already inserted the real message before this returns
-            if messages.contains(where: { $0.id == sent.id }) {
-                messages.removeAll { $0.id == tempId }
-            } else if let idx = messages.firstIndex(where: { $0.id == tempId }) {
-                messages[idx] = DecryptedMessage(
-                    id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
-                    content: text, type: sent.type,
-                    replyToId: capturedReplyTo?.id, threadId: capturedReplyTo?.threadId,
-                    createdAt: sent.createdAt, linkPreview: linkPreview
-                )
-            }
+            confirmOptimistic(tempId: tempId, with: DecryptedMessage(
+                id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
+                content: text, type: sent.type,
+                replyToId: capturedReplyTo?.id, threadId: capturedReplyTo?.threadId,
+                createdAt: sent.createdAt, linkPreview: linkPreview
+            ))
         } catch {
             messages.removeAll { $0.id == tempId }
             replyToMessage = capturedReplyTo
@@ -555,13 +595,7 @@ final class ChatViewModel {
                 id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
                 content: "", type: "image", mediaUrl: url, createdAt: sent.createdAt
             )
-            if messages.contains(where: { $0.id == sent.id }) {
-                messages.removeAll { $0.id == tempId }
-            } else if let idx = messages.firstIndex(where: { $0.id == tempId }) {
-                messages[idx] = confirmed
-            } else {
-                messages.append(confirmed)
-            }
+            confirmOptimistic(tempId: tempId, with: confirmed, appendIfMissing: true)
         } catch {
             messages.removeAll { $0.id == tempId }
             self.error = error.localizedDescription
@@ -602,14 +636,10 @@ final class ChatViewModel {
         )
         do {
             let sent = try await repository.sendMessage(params)
-            if messages.contains(where: { $0.id == sent.id }) {
-                messages.removeAll { $0.id == tempId }
-            } else if let idx = messages.firstIndex(where: { $0.id == tempId }) {
-                messages[idx] = DecryptedMessage(
-                    id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
-                    content: "", type: "gif", mediaUrl: url, createdAt: sent.createdAt
-                )
-            }
+            confirmOptimistic(tempId: tempId, with: DecryptedMessage(
+                id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
+                content: "", type: "gif", mediaUrl: url, createdAt: sent.createdAt
+            ))
         } catch {
             messages.removeAll { $0.id == tempId }
             self.error = error.localizedDescription
@@ -644,14 +674,10 @@ final class ChatViewModel {
                 content: "", iv: nil, type: "sticker", mediaUrl: url, mediaMime: "image/png"
             )
             let sent = try await repository.sendMessage(params)
-            if messages.contains(where: { $0.id == sent.id }) {
-                messages.removeAll { $0.id == tempId }
-            } else if let idx = messages.firstIndex(where: { $0.id == tempId }) {
-                messages[idx] = DecryptedMessage(
-                    id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
-                    content: "", type: "sticker", mediaUrl: url, createdAt: sent.createdAt
-                )
-            }
+            confirmOptimistic(tempId: tempId, with: DecryptedMessage(
+                id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
+                content: "", type: "sticker", mediaUrl: url, createdAt: sent.createdAt
+            ))
         } catch {
             messages.removeAll { $0.id == tempId }
             self.error = error.localizedDescription
@@ -681,14 +707,10 @@ final class ChatViewModel {
                 content: "", iv: nil, type: "voice", mediaUrl: url, mediaMime: "audio/mp4"
             )
             let sent = try await repository.sendMessage(params)
-            if messages.contains(where: { $0.id == sent.id }) {
-                messages.removeAll { $0.id == tempId }
-            } else if let idx = messages.firstIndex(where: { $0.id == tempId }) {
-                messages[idx] = DecryptedMessage(
-                    id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
-                    content: "", type: "voice", mediaUrl: url, createdAt: sent.createdAt
-                )
-            }
+            confirmOptimistic(tempId: tempId, with: DecryptedMessage(
+                id: sent.id, conversationId: sent.conversationId, senderId: sent.senderId,
+                content: "", type: "voice", mediaUrl: url, createdAt: sent.createdAt
+            ))
         } catch {
             messages.removeAll { $0.id == tempId }
             self.error = error.localizedDescription
@@ -729,7 +751,8 @@ final class ChatViewModel {
                     id: m.id, conversationId: m.conversationId, senderId: m.senderId,
                     content: m.content, type: m.type, mediaUrl: m.mediaUrl,
                     replyToId: m.replyToId, threadId: m.threadId, editedAt: m.editedAt,
-                    deletedAt: Date(), createdAt: m.createdAt, senderProfile: m.senderProfile
+                    deletedAt: Date(), createdAt: m.createdAt, senderProfile: m.senderProfile,
+                    localId: m.localId
                 )
             }
         } catch {
@@ -1043,7 +1066,10 @@ final class ChatViewModel {
         }
         var byId: [UUID: DecryptedMessage] = [:]
         for message in messages { byId[message.id] = message }
-        for message in fresh { byId[message.id] = message }
+        for var message in fresh {
+            message.localId = byId[message.id]?.localId
+            byId[message.id] = message
+        }
         messages = byId.values.sorted {
             $0.createdAt == $1.createdAt
                 ? $0.id.uuidString < $1.id.uuidString
@@ -1169,7 +1195,15 @@ final class ChatViewModel {
             decryptFailed: failed,
             linkPreview: linkPreview
         )
-        messages.append(msg)
+        // Animated so ChatView's row insertion transition (slide up + fade)
+        // actually plays for live arrivals; a bare append just pops the row in.
+        if UIAccessibility.isReduceMotionEnabled {
+            messages.append(msg)
+        } else {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                messages.append(msg)
+            }
+        }
         // created_at is the server's clock, so the first figure includes any skew.
         print("[Perf] received \(id): rendered \(Int(Date().timeIntervalSince(createdAt) * 1000))ms after created_at, decrypt \(Self.ms(since: decryptStart))ms")
         // Off the receive path: this is two round-trips, and awaiting it here held
@@ -1213,7 +1247,7 @@ final class ChatViewModel {
                 content: decryptedContent, type: m.type, mediaUrl: m.mediaUrl,
                 replyToId: m.replyToId, threadId: m.threadId, editedAt: editedAt,
                 deletedAt: deletedAt, createdAt: m.createdAt, senderProfile: m.senderProfile,
-                decryptFailed: failed, linkPreview: linkPreview
+                decryptFailed: failed, linkPreview: linkPreview, localId: m.localId
             )
             return
         }
@@ -1223,7 +1257,7 @@ final class ChatViewModel {
             content: m.content, type: m.type, mediaUrl: m.mediaUrl,
             replyToId: m.replyToId, threadId: m.threadId, editedAt: m.editedAt,
             deletedAt: deletedAt, createdAt: m.createdAt, senderProfile: m.senderProfile,
-            decryptFailed: m.decryptFailed
+            decryptFailed: m.decryptFailed, localId: m.localId
         )
     }
 
