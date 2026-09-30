@@ -604,19 +604,19 @@ struct ChatView: View {
     @ViewBuilder
     private var headerPrincipalContent: some View {
         if ChatStyle.current == .imessage {
-            VStack(spacing: 2) {
+            VStack(spacing: 3) {
                 ZStack(alignment: .bottomTrailing) {
                     AvatarView(
                         url: vm.isGroupConversation ? nil : currentOtherMember?.profile.avatarUrl,
                         name: displayName,
-                        size: 32
+                        size: 34
                     )
                     if !vm.isGroupConversation && currentOtherMember != nil {
                         PresenceDotView(isOnline: isOnline, borderColor: .yaplySurface, size: 8)
                     }
                 }
                 Text(displayName)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.yaplyPrimary)
             }
         } else {
