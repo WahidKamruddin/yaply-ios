@@ -447,6 +447,9 @@ struct MessageBubbleView: View, Equatable {
             } action: { rect in
                 anchorStore?.frames[message.id] = rect
             }
+            // LazyVStack tears rows down off-screen without a final geometry
+            // callback; drop the entry so readers never see a stale rect.
+            .onDisappear { anchorStore?.frames[message.id] = nil }
             .overlay(alignment: isOwn ? .topLeading : .topTrailing) {
                 if ChatStyle.current == .imessage {
                     tapbackBadges

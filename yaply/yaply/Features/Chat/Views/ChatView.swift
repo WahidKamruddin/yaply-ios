@@ -419,14 +419,18 @@ struct ChatView: View {
                                 // pin it above the keyboard, wherever in the history that is.
                                 // Captured synchronously (pre-keyboard geometry); the actual
                                 // scroll is deferred a tick below.
+                                // Only a bubble we still have live geometry for; with none,
+                                // leave the viewport alone rather than jump somewhere.
                                 let lastVisibleId = anchorStore.frames
-                                    .filter { $0.value.maxY <= scrollViewFrame.maxY + 1 && $0.value.maxY >= scrollViewFrame.minY }
+                                    .filter {
+                                        vm.layout.messagesById[$0.key] != nil
+                                            && $0.value.maxY <= scrollViewFrame.maxY + 1
+                                            && $0.value.maxY >= scrollViewFrame.minY
+                                    }
                                     .max(by: { $0.value.maxY < $1.value.maxY })?.key
-                                performKeyboardScroll(scrollProxy) {
-                                    if let lastVisibleId {
+                                if let lastVisibleId {
+                                    performKeyboardScroll(scrollProxy) {
                                         scrollProxy.scrollTo(rowId(for: lastVisibleId), anchor: .bottom)
-                                    } else {
-                                        scrollProxy.scrollTo("bottom", anchor: .bottom)
                                     }
                                 }
                             } else if isNearBottom {
