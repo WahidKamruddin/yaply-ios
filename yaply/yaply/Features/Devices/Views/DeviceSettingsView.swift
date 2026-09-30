@@ -180,7 +180,7 @@ struct DeviceSettingsView: View {
     }
 
     private func load() async {
-        if let pub = try? KeyStore.loadIdentityPublicKey() {
+        if let pub = try? KeyStore.loadIdentityPublicKey(forUser: userId) {
             myFingerprint = EncryptionService.fingerprint(for: pub)
         }
         do {

@@ -127,6 +127,44 @@ enum LinkPreviewCodec {
         guard let decoded = try? JSONDecoder().decode(EncodedTextMessage.self, from: data), decoded.v == 1 else {
             return (raw, nil)
         }
-        return (decoded.text, decoded.linkPreview)
+        guard let preview = decoded.linkPreview else { return (decoded.text, nil) }
+        // Mirrors web's decodeTextMessage: the sender controls this JSON.
+        // Only http(s) page URLs, and an image only from our own bucket — a
+        // third-party host would make every recipient's client fetch it (IP and
+        // read-time leak). An untrusted image is dropped; the preview remains.
+        guard let pageUrl = URL(string: preview.url), ["http", "https"].contains(pageUrl.scheme?.lowercased()) else {
+            return (decoded.text, nil)
+        }
+        let image = preview.imageUrl.flatMap { isTrustedPreviewImage($0) ? $0 : nil }
+        return (decoded.text, LinkPreview(
+            url: preview.url,
+            title: preview.title,
+            description: preview.description,
+            imageUrl: image,
+            siteName: preview.siteName
+        ))
+    }
+
+    private static let previewImagePath = "/storage/v1/object/public/link-preview-images/"
+
+    // The project's own origin. Fail closed: with no configured URL no image loads.
+    private static let trustedImageOrigin: (scheme: String, host: String, port: Int?)? = {
+        guard
+            let raw = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String
+                ?? ProcessInfo.processInfo.environment["SUPABASE_URL"],
+            let url = URL(string: raw), let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased()
+        else { return nil }
+        return (scheme, host, url.port)
+    }()
+
+    private static func isTrustedPreviewImage(_ string: String) -> Bool {
+        guard
+            let origin = trustedImageOrigin,
+            let url = URL(string: string),
+            url.scheme?.lowercased() == origin.scheme,
+            url.host?.lowercased() == origin.host,
+            url.port == origin.port
+        else { return false }
+        return url.path.hasPrefix(previewImagePath)
     }
 }

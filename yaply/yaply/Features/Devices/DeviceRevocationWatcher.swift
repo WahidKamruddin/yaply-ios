@@ -39,9 +39,7 @@ final class DeviceRevocationWatcher {
                 let deviceId = ((try? KeyStore.loadDeviceId(forUser: userId)) ?? nil)
             else { return }
 
-            // Resolve our own row id so the subscription can be filtered to it.
-            // A delete event only carries the primary key, and filtering
-            // server-side means no other user's device ids are ever observable.
+            // Resolve our own row id so delete events can be matched against it.
             guard let rowId = await self.resolveRowId(userId: userId, deviceId: deviceId) else {
                 // Successful-but-empty is handled inside resolveRowId; nil here
                 // means either "revoked" (already handled) or a failed lookup,
@@ -55,11 +53,13 @@ final class DeviceRevocationWatcher {
             // being removed and never finish subscribing.
             let ch = await RealtimeConnectionMonitor.channel("device-revocation:\(rowId.uuidString)")
             guard !Task.isCancelled else { RealtimeConnectionMonitor.remove(ch); return }
+            // Realtime cannot filter DELETE events (a filtered subscription is silently
+            // never matched — this watcher used to never fire), so subscribe unfiltered
+            // and match our own row id on oldRecord below.
             let deletes = ch.postgresChange(
                 DeleteAction.self,
                 schema: "public",
-                table: "devices",
-                filter: .eq("id", value: rowId.uuidString)
+                table: "devices"
             )
             let label = "device-revocation:\(rowId.uuidString)"
             // Non-critical: it has no reconnect closure a sweep could run, and the
@@ -83,7 +83,10 @@ final class DeviceRevocationWatcher {
                     }
                 }
                 group.addTask {
-                    for await _ in deletes {
+                    for await delete in deletes {
+                        // Only our own row. The id is the lone field a DELETE carries.
+                        guard case .string(let id)? = delete.oldRecord["id"],
+                              id.lowercased() == rowId.uuidString.lowercased() else { continue }
                         await self.revokeLocally()
                         break
                     }

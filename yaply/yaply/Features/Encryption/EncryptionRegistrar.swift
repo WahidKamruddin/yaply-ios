@@ -71,11 +71,11 @@ actor EncryptionRegistrar {
         }
 
         let privateKey: P256.KeyAgreement.PrivateKey
-        if storedDeviceId != nil, let existing = try KeyStore.loadIdentityKeyPair() {
+        if storedDeviceId != nil, let existing = try KeyStore.loadIdentityKeyPair(forUser: userId) {
             privateKey = existing
         } else {
             privateKey = EncryptionService.generateKeyPair()
-            try KeyStore.storeIdentityKeyPair(privateKey)
+            try KeyStore.storeIdentityKeyPair(privateKey, forUser: userId)
         }
 
         let isNewDevice = storedDeviceId == nil

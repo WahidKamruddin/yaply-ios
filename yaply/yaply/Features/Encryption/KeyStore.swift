@@ -17,8 +17,11 @@ import CryptoKit
 // before first unlock and excluded from iCloud backup.
 enum KeyStore {
 
-    private static let identityPrivate  = "yaply.identity.private"
-    private static let identityPublic   = "yaply.identity.public"
+    private static let identityPrivatePrefix = "yaply.identity.private."
+    private static let identityPublicPrefix  = "yaply.identity.public."
+    // Pre-scoping single slot — read only by the one-time migration and clearAllKeys.
+    private static let legacyIdentityPrivate = "yaply.identity.private"
+    private static let legacyIdentityPublic  = "yaply.identity.public"
     private static let deviceIdPrefix   = "yaply.deviceId."
     private static let escrowPrefix     = "yaply.escrow."
 
@@ -46,30 +49,66 @@ enum KeyStore {
         }
     }
 
-    static func storeIdentityKeyPair(_ privateKey: P256.KeyAgreement.PrivateKey) throws {
-        // The identity pair is not per-user in storage, so every user's
-        // resolved keys are now potentially stale.
-        invalidatePrivateKeyCache()
+    // Scoped per user, like the device id and escrow slots. A single fixed slot
+    // let the next account on a handed-off device (Keychain items survive an app
+    // delete) inherit the previous account's keypair and republish it as its own.
+    private static func identityPrivateKey(forUser userId: UUID) -> String { identityPrivatePrefix + userId.uuidString }
+    private static func identityPublicKey(forUser userId: UUID) -> String { identityPublicPrefix + userId.uuidString }
+
+    static func storeIdentityKeyPair(_ privateKey: P256.KeyAgreement.PrivateKey, forUser userId: UUID) throws {
+        invalidatePrivateKeyCache(forUser: userId)
         try KeychainService.save(
-            key: identityPrivate,
+            key: identityPrivateKey(forUser: userId),
             data: privateKey.rawRepresentation,  // 32-byte private scalar
             accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         )
         try KeychainService.save(
-            key: identityPublic,
+            key: identityPublicKey(forUser: userId),
             data: privateKey.publicKey.x963Representation,  // 65-byte uncompressed point
             accessible: kSecAttrAccessibleAfterFirstUnlock
         )
     }
 
-    static func loadIdentityKeyPair() throws -> P256.KeyAgreement.PrivateKey? {
-        guard let privData = try KeychainService.load(key: identityPrivate) else { return nil }
+    static func loadIdentityKeyPair(forUser userId: UUID) throws -> P256.KeyAgreement.PrivateKey? {
+        try adoptLegacyIdentityIfOwned(by: userId)
+        guard let privData = try KeychainService.load(key: identityPrivateKey(forUser: userId)) else { return nil }
         return try P256.KeyAgreement.PrivateKey(rawRepresentation: privData)
     }
 
-    static func loadIdentityPublicKey() throws -> P256.KeyAgreement.PublicKey? {
-        guard let pubData = try KeychainService.load(key: identityPublic) else { return nil }
+    static func loadIdentityPublicKey(forUser userId: UUID) throws -> P256.KeyAgreement.PublicKey? {
+        try adoptLegacyIdentityIfOwned(by: userId)
+        guard let pubData = try KeychainService.load(key: identityPublicKey(forUser: userId)) else { return nil }
         return try P256.KeyAgreement.PublicKey(x963Representation: pubData)
+    }
+
+    /// One-time migration of the pre-scoping single-slot identity pair.
+    ///
+    /// Ownership is decided by the user-scoped device id, which has always been
+    /// written alongside the keypair: only a user who has a stored device id on
+    /// this install registered that key. Anyone else (a different account that
+    /// signed in on a handed-off device) gets nothing and generates a fresh pair.
+    /// The legacy slot is removed once adopted, so it can never be adopted twice.
+    private static func adoptLegacyIdentityIfOwned(by userId: UUID) throws {
+        guard
+            let legacyPriv = try KeychainService.load(key: legacyIdentityPrivate),
+            try loadDeviceId(forUser: userId) != nil,
+            try KeychainService.load(key: identityPrivateKey(forUser: userId)) == nil
+        else { return }
+        try KeychainService.save(
+            key: identityPrivateKey(forUser: userId),
+            data: legacyPriv,
+            accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        )
+        if let legacyPub = try KeychainService.load(key: legacyIdentityPublic) {
+            try KeychainService.save(
+                key: identityPublicKey(forUser: userId),
+                data: legacyPub,
+                accessible: kSecAttrAccessibleAfterFirstUnlock
+            )
+        }
+        KeychainService.delete(key: legacyIdentityPrivate)
+        KeychainService.delete(key: legacyIdentityPublic)
+        invalidatePrivateKeyCache(forUser: userId)
     }
 
     // MARK: — Per-install device id (v2 — random per install, never hardcoded to 1)
@@ -143,7 +182,7 @@ enum KeyStore {
     // what makes history readable after pairing.
     static func candidateFingerprints(forUser userId: UUID) -> [String] {
         var fingerprints: [String] = []
-        if let pub = try? loadIdentityPublicKey() {
+        if let pub = try? loadIdentityPublicKey(forUser: userId) {
             fingerprints.append(EncryptionService.fingerprint(for: pub))
         }
         for key in loadEscrowedKeys(forUser: userId) {
@@ -167,7 +206,7 @@ enum KeyStore {
     }
 
     private static func resolvePrivateKey(forFingerprint fingerprint: String, userId: UUID) -> P256.KeyAgreement.PrivateKey? {
-        if let own = try? loadIdentityKeyPair(),
+        if let own = try? loadIdentityKeyPair(forUser: userId),
            EncryptionService.fingerprint(for: own.publicKey) == fingerprint {
             return own
         }
@@ -181,7 +220,7 @@ enum KeyStore {
     // plus everything already escrowed here.
     static func transferableKeys(forUser userId: UUID) -> [DevicePairingCrypto.EscrowedKey] {
         var out = loadEscrowedKeys(forUser: userId)
-        guard let own = try? loadIdentityKeyPair() else { return out }
+        guard let own = try? loadIdentityKeyPair(forUser: userId) else { return out }
         let ownJWK = DevicePairingCrypto.jwk(from: own)
         let ownFp = "\(ownJWK.x).\(ownJWK.y)"
         if !out.contains(where: { "\($0.pub.x).\($0.pub.y)" == ownFp }) {
@@ -198,8 +237,9 @@ enum KeyStore {
 
     static func clearAllKeys() {
         invalidatePrivateKeyCache()
-        KeychainService.delete(key: identityPrivate)
-        KeychainService.delete(key: identityPublic)
+        // Both prefixes also match the legacy unscoped names.
+        KeychainService.deleteAll(prefix: legacyIdentityPrivate)
+        KeychainService.deleteAll(prefix: legacyIdentityPublic)
         KeychainService.deleteAll(prefix: deviceIdPrefix)
         KeychainService.deleteAll(prefix: escrowPrefix)
     }
