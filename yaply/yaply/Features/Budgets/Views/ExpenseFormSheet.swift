@@ -1,6 +1,10 @@
 import SwiftUI
 
-nonisolated struct ExpenseFormInput: Sendable {
+/// A class so it crosses the `onSave` closure as one pointer. `onSave` and
+/// `BudgetDetailViewModel.attempt` are explicitly `@MainActor`: with the implicit
+/// nonsending isolation parameter the argument arrived as a bogus constant
+/// pointer and crashed `BudgetRepository.saveExpense`.
+nonisolated final class ExpenseFormInput: Sendable {
     let description: String
     let amountCents: Int
     let category: String
@@ -10,6 +14,18 @@ nonisolated struct ExpenseFormInput: Sendable {
     let participants: [UUID]
     let exactCents: [UUID: Int]?
     let spentOn: String
+
+    init(description: String, amountCents: Int, category: String, paidBy: UUID,
+         splitMode: String, participants: [UUID], exactCents: [UUID: Int]?, spentOn: String) {
+        self.description = description
+        self.amountCents = amountCents
+        self.category = category
+        self.paidBy = paidBy
+        self.splitMode = splitMode
+        self.participants = participants
+        self.exactCents = exactCents
+        self.spentOn = spentOn
+    }
 }
 
 /// Add / edit an expense. Same fields and rules as web's ExpenseDialog: equal
@@ -21,8 +37,7 @@ struct ExpenseFormSheet: View {
     let currentUserId: UUID
     let names: BudgetNames
     let expense: YaplyExpense?
-    /// Returns an error message to show inline, or nil on success.
-    let onSave: (ExpenseFormInput) async -> String?
+    let vm: BudgetDetailViewModel
 
     @Environment(\.yaplyPopupDismiss) private var dismiss
 
@@ -37,13 +52,13 @@ struct ExpenseFormSheet: View {
     @State private var isSaving = false
     @State private var saveError: String?
 
-    init(budget: YaplyBudget, members: [MemberSummary], currentUserId: UUID, names: BudgetNames, expense: YaplyExpense?, onSave: @escaping (ExpenseFormInput) async -> String?) {
+    init(budget: YaplyBudget, members: [MemberSummary], currentUserId: UUID, names: BudgetNames, expense: YaplyExpense?, vm: BudgetDetailViewModel) {
         self.budget = budget
         self.members = members
         self.currentUserId = currentUserId
         self.names = names
         self.expense = expense
-        self.onSave = onSave
+        self.vm = vm
         _description = State(initialValue: expense?.description ?? "")
         _amount = State(initialValue: expense.map { BudgetMoney.inputString(cents: BudgetMoney.cents($0.amount)) } ?? "")
         _category = State(initialValue: expense?.category ?? "other")
@@ -247,7 +262,7 @@ struct ExpenseFormSheet: View {
         isSaving = true
         saveError = nil
         Task {
-            let error = await onSave(input)
+            let error = await vm.saveExpense(input, editing: expense?.id)
             isSaving = false
             if let error { saveError = error } else { dismiss() }
         }

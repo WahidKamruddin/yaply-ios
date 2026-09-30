@@ -59,10 +59,9 @@ struct BudgetDetailView: View {
                     members: members,
                     currentUserId: currentUserId,
                     names: names,
-                    expense: target.expense
-                ) { input in
-                    await vm.saveExpense(input, editing: target.expense?.id)
-                }
+                    expense: target.expense,
+                    vm: vm
+                )
             }
         }
         .yaplyPopup(item: $settling) { debt in

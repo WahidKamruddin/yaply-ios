@@ -60,7 +60,7 @@ final class BudgetDetailViewModel {
 
     /// Runs a write and reloads. Returns the error message instead of setting
     /// `error`, for sheets that show it inline (an alert can't present over them).
-    func attempt(_ op: () async throws -> Void) async -> String? {
+    func attempt(_ op: @MainActor () async throws -> Void) async -> String? {
         do {
             try await op()
             await load(showSpinner: false)
@@ -70,7 +70,7 @@ final class BudgetDetailViewModel {
         }
     }
 
-    private func perform(_ op: () async throws -> Void) async {
+    private func perform(_ op: @MainActor () async throws -> Void) async {
         if let message = await attempt(op) { error = message }
     }
 
