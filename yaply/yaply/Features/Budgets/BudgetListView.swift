@@ -146,6 +146,9 @@ struct BudgetListView: View {
                     Task {
                         try? await repo.linkToEvent(budgetId: budget.id, eventId: event.id)
                         budgetToLink = nil
+                        // Let the popup's dismiss animation finish; reloading @State
+                        // mid-animation gives a layout warning and a list flash.
+                        try? await Task.sleep(for: .milliseconds(350))
                         await load()
                     }
                 }

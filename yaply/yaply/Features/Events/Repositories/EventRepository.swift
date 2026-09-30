@@ -311,6 +311,9 @@ final class EventRepository {
             .select("*, creator:profiles!albums_created_by_fkey(display_name, username), album_media(media_url)")
             .eq("event_id", value: eventId.uuidString)
             .order("created_at", ascending: false)
+            // Only the cover is shown: one embedded row per album, not the whole photo list.
+            .order("created_at", ascending: true, referencedTable: "album_media")
+            .limit(1, referencedTable: "album_media")
             .execute()
             .value
     }
