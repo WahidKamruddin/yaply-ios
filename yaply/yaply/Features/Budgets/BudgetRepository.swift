@@ -286,19 +286,8 @@ final class BudgetRepository {
     // MARK: Writes (RPC only — the tables reject direct writes)
 
     /// Insert (expenseId nil) or edit. Equal: `participants`; exact: `exactCents`.
-    func saveExpense(
-        budgetId: UUID,
-        expenseId: UUID?,
-        description: String,
-        amountCents: Int,
-        category: String,
-        paidBy: UUID,
-        splitMode: String,
-        participants: [UUID],
-        exactCents: [UUID: Int]?,
-        spentOn: String?
-    ) async throws {
-        struct Params: Encodable {
+    func saveExpense(budgetId: UUID, expenseId: UUID?, input: ExpenseFormInput) async throws {
+        nonisolated struct Params: Encodable {
             let p_budget_id: String
             let p_expense_id: String?
             let p_description: String
@@ -330,21 +319,22 @@ final class BudgetRepository {
                      p_paid_by, p_split_mode, p_participants, p_exact, p_spent_on
             }
         }
-        let exact = exactCents.map { dict in
+        let exact = input.exactCents.map { dict in
             Dictionary(uniqueKeysWithValues: dict.map { ($0.key.uuidString.lowercased(), BudgetMoney.decimal(cents: $0.value)) })
         }
+        let isEqual = input.splitMode == "equal"
         try await supabase
             .rpc("save_expense", params: Params(
                 p_budget_id: budgetId.uuidString,
                 p_expense_id: expenseId?.uuidString,
-                p_description: description.trimmingCharacters(in: .whitespacesAndNewlines),
-                p_amount: BudgetMoney.decimal(cents: amountCents),
-                p_category: category,
-                p_paid_by: paidBy.uuidString,
-                p_split_mode: splitMode,
-                p_participants: splitMode == "equal" ? participants.map(\.uuidString) : [],
-                p_exact: splitMode == "exact" ? exact : nil,
-                p_spent_on: spentOn
+                p_description: input.description.trimmingCharacters(in: .whitespacesAndNewlines),
+                p_amount: BudgetMoney.decimal(cents: input.amountCents),
+                p_category: input.category,
+                p_paid_by: input.paidBy.uuidString,
+                p_split_mode: input.splitMode,
+                p_participants: isEqual ? input.participants.map(\.uuidString) : [],
+                p_exact: isEqual ? nil : exact,
+                p_spent_on: input.spentOn
             ))
             .execute()
     }

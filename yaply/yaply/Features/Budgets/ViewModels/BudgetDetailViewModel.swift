@@ -76,13 +76,7 @@ final class BudgetDetailViewModel {
 
     func saveExpense(_ input: ExpenseFormInput, editing expenseId: UUID?) async -> String? {
         await attempt {
-            try await repo.saveExpense(
-                budgetId: budgetId, expenseId: expenseId,
-                description: input.description, amountCents: input.amountCents,
-                category: input.category, paidBy: input.paidBy,
-                splitMode: input.splitMode, participants: input.participants,
-                exactCents: input.exactCents, spentOn: input.spentOn
-            )
+            try await repo.saveExpense(budgetId: budgetId, expenseId: expenseId, input: input)
         }
     }
 

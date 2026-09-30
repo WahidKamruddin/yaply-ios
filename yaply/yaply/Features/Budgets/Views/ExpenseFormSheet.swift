@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct ExpenseFormInput {
+nonisolated struct ExpenseFormInput: Sendable {
     let description: String
     let amountCents: Int
     let category: String
