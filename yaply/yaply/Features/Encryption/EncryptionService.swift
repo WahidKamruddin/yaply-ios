@@ -49,13 +49,15 @@ nonisolated enum EncryptionService {
         let x963 = key.x963Representation
         let x = x963[1..<33]
         let y = x963[33..<65]
+        // Only the EC coordinates. This used to also write `key_ops: "deriveKey"`
+        // and `ext: "true"` — a bare string and a string where Web Crypto needs an
+        // array and a boolean — so web's importKey threw on every iOS device key
+        // and ephemeral key, breaking sends to and decryption from iOS.
         return [
-            "kty":     "EC",
-            "crv":     "P-256",
-            "x":       x.base64URLEncodedString(),
-            "y":       y.base64URLEncodedString(),
-            "key_ops": "deriveKey",
-            "ext":     "true",
+            "kty": "EC",
+            "crv": "P-256",
+            "x":   x.base64URLEncodedString(),
+            "y":   y.base64URLEncodedString(),
         ]
     }
 
